@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { ROLES } from "./schema";
 
 // Shared helpers -----------------------------------------------------------------
@@ -17,9 +18,26 @@ async function requireUser(ctx: QueryCtx | MutationCtx) {
   return user;
 }
 
+async function requireAdmin(ctx: QueryCtx | MutationCtx) {
+  const user = await requireUser(ctx);
+  if (user.role !== ROLES.ADMIN) {
+    throw new Error("Akses ditolak. Hanya admin yang bisa melakukan ini.");
+  }
+  return user;
+}
+
+/** Resolve a subject's name for display (null if it was deleted). */
+async function subjectName(
+  ctx: QueryCtx | MutationCtx,
+  subjectId: Id<"subjects">,
+) {
+  const subject = await ctx.db.get(subjectId);
+  return subject ? subject.name : null;
+}
+
 // Roles --------------------------------------------------------------------------
 
-/** First-login role selection: a user picks teacher or student once. */
+/** First-login role selection (only for legacy accounts without a role). */
 export const setRole = mutation({
   args: {
     role: v.union(v.literal(ROLES.TEACHER), v.literal(ROLES.STUDENT)),
@@ -35,23 +53,39 @@ export const setRole = mutation({
 
 // Exams --------------------------------------------------------------------------
 
-/** Exams visible to the current user: teachers see their own, students see all active. */
+/**
+ * Exams visible to the current user:
+ * - admin: every exam (drafts + published), with subject & teacher names
+ * - teacher: their own exams, with subject name
+ * - student: only published (isActive) exams, with subject name
+ */
 export const listExams = query({
   args: {},
   handler: async (ctx) => {
     const user = await requireUser(ctx);
-    if (user.role === ROLES.TEACHER) {
-      return await ctx.db
-        .query("exams")
-        .withIndex("by_creator", (q) => q.eq("createdBy", user._id))
-        .order("desc")
-        .collect();
-    }
-    return await ctx.db
+    const all = await ctx.db
       .query("exams")
-      .filter((q) => q.eq(q.field("isActive"), true))
       .order("desc")
       .collect();
+
+    let rows = all;
+    if (user.role === ROLES.TEACHER) {
+      rows = all.filter((exam) => exam.createdBy === user._id);
+    } else if (user.role === ROLES.STUDENT) {
+      rows = all.filter((exam) => exam.isActive);
+    }
+    // Admin sees everything.
+
+    return await Promise.all(
+      rows.map(async (exam) => {
+        const teacher = await ctx.db.get(exam.createdBy);
+        return {
+          ...exam,
+          subjectName: await subjectName(ctx, exam.subjectId),
+          teacherName: teacher ? (teacher.name ?? null) : null,
+        };
+      }),
+    );
   },
 });
 
@@ -63,19 +97,21 @@ export const getExam = query({
     if (exam === null) {
       throw new Error("Ujian tidak ditemukan.");
     }
-    return exam;
+    return {
+      ...exam,
+      subjectName: await subjectName(ctx, exam.subjectId),
+    };
   },
 });
 
+/** Teacher creates an exam as a draft; the admin schedules & publishes it. */
 export const createExam = mutation({
   args: {
     title: v.string(),
-    subject: v.optional(v.string()),
+    subjectId: v.id("subjects"),
     description: v.optional(v.string()),
     googleFormUrl: v.string(),
     durationMinutes: v.number(),
-    startsAt: v.optional(v.number()),
-    endsAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -90,28 +126,54 @@ export const createExam = mutation({
     if (durationMinutes < 1 || durationMinutes > 600) {
       throw new Error("Durasi ujian harus antara 1–600 menit.");
     }
-    if (
-      args.startsAt !== undefined &&
-      args.endsAt !== undefined &&
-      args.endsAt <= args.startsAt
-    ) {
-      throw new Error("Waktu tutup harus setelah waktu buka.");
-    }
     const googleFormUrl = args.googleFormUrl.trim();
     if (!/^https?:\/\//i.test(googleFormUrl)) {
       throw new Error("Link Google Form harus berupa URL yang valid (mulai dengan https://).");
     }
+    const subject = await ctx.db.get(args.subjectId);
+    if (subject === null) {
+      throw new Error("Mapel tidak ditemukan. Pilih mapel yang tersedia.");
+    }
     return await ctx.db.insert("exams", {
       title,
-      subject: args.subject?.trim() || undefined,
+      subjectId: args.subjectId,
       description: args.description?.trim() || undefined,
       googleFormUrl,
       durationMinutes,
-      isActive: true,
-      startsAt: args.startsAt,
-      endsAt: args.endsAt,
+      isActive: false, // draft until the admin schedules & publishes it
+      startsAt: undefined,
+      endsAt: undefined,
       createdBy: user._id,
       createdAt: Date.now(),
+    });
+  },
+});
+
+/** Admin schedules (open/close window) and publishes/unpublishes an exam. */
+export const setExamSchedule = mutation({
+  args: {
+    examId: v.id("exams"),
+    isActive: v.boolean(),
+    startsAt: v.optional(v.number()),
+    endsAt: v.optional(v.number()),
+  },
+  handler: async (ctx, { examId, isActive, startsAt, endsAt }) => {
+    await requireAdmin(ctx);
+    const exam = await ctx.db.get(examId);
+    if (exam === null) {
+      throw new Error("Ujian tidak ditemukan.");
+    }
+    if (
+      startsAt !== undefined &&
+      endsAt !== undefined &&
+      endsAt <= startsAt
+    ) {
+      throw new Error("Waktu tutup harus setelah waktu buka.");
+    }
+    await ctx.db.patch(examId, {
+      isActive,
+      startsAt,
+      endsAt,
     });
   },
 });
@@ -161,6 +223,9 @@ export const startAttempt = mutation({
     const exam = await ctx.db.get(examId);
     if (exam === null) {
       throw new Error("Ujian tidak ditemukan.");
+    }
+    if (!exam.isActive) {
+      throw new Error("Ujian belum dipublikasikan.");
     }
     const existing = await ctx.db
       .query("examAttempts")
@@ -282,7 +347,7 @@ export const attemptsForExam = query({
         return {
           ...attempt,
           student: student
-            ? { name: student.name, email: student.email }
+            ? { name: student.name, username: student.username }
             : null,
         };
       }),

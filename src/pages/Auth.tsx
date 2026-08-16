@@ -1,7 +1,10 @@
 import { motion } from "framer-motion";
-import { ArrowRight, Loader2, Lock, Mail } from "lucide-react";
+import { KeyRound, Loader2, Lock, ShieldCheck, UserRound } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
+import { useAction, useQuery } from "convex/react";
+import { toast } from "sonner";
+import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,11 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  InputOTP,
-  InputOTPGroup,
-  InputOTPSlot,
-} from "@/components/ui/input-otp";
+import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import logo from "@/assets/logo.svg";
 
@@ -42,10 +41,14 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     searchParams.get("returnTo"),
     redirectAfterAuth,
   );
-  const [step, setStep] = useState<"signIn" | { email: string }>("signIn");
-  const [otp, setOtp] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // First-run setup: no admin account exists yet → offer bootstrap.
+  const hasAdmin = useQuery(api.users.hasAdmin);
+  const bootstrapAdmin = useAction(api.users.bootstrapAdmin);
+  const [showSetup, setShowSetup] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
@@ -53,39 +56,44 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     }
   }, [authLoading, isAuthenticated, navigate, redirect]);
 
-  const handleEmailSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleLogin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setIsLoading(true);
     setError(null);
     try {
-      const formData = new FormData(event.currentTarget);
-      await signIn("email-otp", formData);
-      setStep({ email: formData.get("email") as string });
-      setIsLoading(false);
-    } catch (error) {
-      console.error("Email sign-in error:", error);
+      await signIn("password", new FormData(event.currentTarget));
+      // Navigation happens via the auth-state effect above once confirmed.
+    } catch (err) {
+      console.error("Login error:", err);
       setError(
-        error instanceof Error
-          ? error.message
-          : "Gagal mengirim kode verifikasi. Silakan coba lagi.",
+        err instanceof Error
+          ? err.message
+          : "Username atau password salah. Silakan coba lagi.",
       );
       setIsLoading(false);
     }
   };
 
-  const handleOtpSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSetup = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setIsLoading(true);
+    setSetupLoading(true);
     setError(null);
+    const formData = new FormData(event.currentTarget);
     try {
-      const formData = new FormData(event.currentTarget);
-      await signIn("email-otp", formData);
-      navigate(redirect);
-    } catch (error) {
-      console.error("OTP verification error:", error);
-      setError("Kode verifikasi yang kamu masukkan salah.");
-      setIsLoading(false);
-      setOtp("");
+      await bootstrapAdmin({
+        name: String(formData.get("setup-name") || ""),
+        username: String(formData.get("setup-username") || ""),
+        password: String(formData.get("setup-password") || ""),
+      });
+      setShowSetup(false);
+      toast.success("Akun admin pertama dibuat", {
+        description: "Silakan login dengan akun tersebut.",
+      });
+    } catch (err) {
+      console.error("Bootstrap admin error:", err);
+      setError(err instanceof Error ? err.message : "Gagal membuat akun admin.");
+    } finally {
+      setSetupLoading(false);
     }
   };
 
@@ -115,140 +123,189 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
         className="relative w-full max-w-md"
       >
         <Card className="rounded-2xl border-border/70 shadow-xl shadow-slate-900/5">
-          {step === "signIn" ? (
-            <>
-              <CardHeader className="text-center">
-                <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Lock className="size-5" />
+          <CardHeader className="text-center">
+            <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Lock className="size-5" />
+            </div>
+            <CardTitle className="mt-2 text-xl tracking-tight">
+              Masuk UjianKita
+            </CardTitle>
+            <CardDescription>
+              Masukkan username dan password dari akun yang dibuat admin sekolah.
+            </CardDescription>
+          </CardHeader>
+          <form onSubmit={handleLogin}>
+            <CardContent className="grid gap-4 pb-2">
+              <div className="grid gap-2">
+                <Label htmlFor="login-username">Username</Label>
+                <div className="relative">
+                  <UserRound className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="login-username"
+                    name="username"
+                    placeholder="mis. budi.siswa"
+                    autoComplete="username"
+                    className="h-11 rounded-lg pl-10"
+                    disabled={isLoading}
+                    required
+                  />
                 </div>
-                <CardTitle className="mt-2 text-xl tracking-tight">
-                  Selamat datang kembali
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="login-password">Password</Label>
+                <div className="relative">
+                  <KeyRound className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="login-password"
+                    name="password"
+                    type="password"
+                    placeholder="••••••••"
+                    autoComplete="current-password"
+                    className="h-11 rounded-lg pl-10"
+                    disabled={isLoading}
+                    required
+                  />
+                </div>
+              </div>
+              <input type="hidden" name="flow" value="signIn" />
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </CardContent>
+            <CardFooter className="flex-col gap-3 pb-7">
+              <Button
+                type="submit"
+                className="h-11 w-full rounded-lg"
+                disabled={isLoading || hasAdmin === undefined}
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Memeriksa...
+                  </>
+                ) : (
+                  <>
+                    Masuk
+                    <Lock className="size-4" />
+                  </>
+                )}
+              </Button>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Tidak punya akun? Hubungi admin sekolah — semua akun (guru &
+                siswa) dibuat oleh admin.
+              </p>
+            </CardFooter>
+          </form>
+        </Card>
+
+        {hasAdmin === false && !showSetup && (
+          <div className="relative mt-4 rounded-2xl border border-primary/25 bg-primary/5 p-4">
+            <p className="flex items-center gap-2 text-sm font-semibold text-primary">
+              <ShieldCheck className="size-4" />
+              Pengaturan awal
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              Belum ada akun admin. Buat akun admin pertama untuk mulai
+              mengelola siswa, guru, dan jadwal ujian.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3 rounded-lg"
+              onClick={() => setShowSetup(true)}
+            >
+              Buat akun admin
+            </Button>
+          </div>
+        )}
+
+        {showSetup && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <Card className="mt-4 rounded-2xl border-primary/25 shadow-lg">
+              <CardHeader>
+                <CardTitle className="text-base tracking-tight">
+                  Buat akun admin pertama
                 </CardTitle>
                 <CardDescription>
-                  Masukkan email untuk masuk sebagai guru atau siswa
+                  Akun ini berperan sebagai pengelola sistem. Simpan username &
+                  password-nya baik-baik.
                 </CardDescription>
               </CardHeader>
-              <form onSubmit={handleEmailSubmit}>
-                <CardContent className="pb-2">
-                  <div className="relative">
-                    <Mail className="absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <form onSubmit={handleSetup}>
+                <CardContent className="grid gap-3 pb-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="setup-name" className="text-xs">
+                      Nama
+                    </Label>
                     <Input
-                      name="email"
-                      placeholder="nama@sekolah.sch.id"
-                      type="email"
-                      autoComplete="email"
-                      className="h-11 rounded-lg pl-10"
-                      disabled={isLoading}
+                      id="setup-name"
+                      name="setup-name"
+                      placeholder="mis. Admin Sekolah"
+                      disabled={setupLoading}
                       required
                     />
                   </div>
-                  {error && (
-                    <p className="mt-2 text-sm text-destructive">{error}</p>
-                  )}
-                </CardContent>
-                <CardFooter className="flex-col gap-3 pb-7">
-                  <Button
-                    type="submit"
-                    className="h-11 w-full rounded-lg"
-                    disabled={isLoading}
-                  >
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        Mengirim kode...
-                      </>
-                    ) : (
-                      <>
-                        Kirim kode verifikasi
-                        <ArrowRight className="size-4" />
-                      </>
-                    )}
-                  </Button>
-                  <p className="text-xs leading-relaxed text-muted-foreground">
-                    Kode 6 digit akan dikirim ke email kamu. Belum punya akun?{" "}
-                    <span className="font-medium text-foreground">
-                      Email pertama kali otomatis mendaftar.
-                    </span>
-                  </p>
-                </CardFooter>
-              </form>
-            </>
-          ) : (
-            <>
-              <CardHeader className="text-center">
-                <div className="mx-auto flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                  <Mail className="size-5" />
-                </div>
-                <CardTitle className="mt-2 text-xl tracking-tight">
-                  Periksa email kamu
-                </CardTitle>
-                <CardDescription>
-                  Kami sudah mengirim kode 6 digit ke{" "}
-                  <span className="font-medium text-foreground">{step.email}</span>
-                </CardDescription>
-              </CardHeader>
-              <form onSubmit={handleOtpSubmit}>
-                <CardContent className="pb-4">
-                  <input type="hidden" name="email" value={step.email} />
-                  <input type="hidden" name="code" value={otp} />
-                  <div className="flex justify-center">
-                    <InputOTP
-                      value={otp}
-                      onChange={setOtp}
-                      maxLength={6}
-                      disabled={isLoading}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && otp.length === 6 && !isLoading) {
-                          const form = (e.target as HTMLElement).closest("form");
-                          if (form) form.requestSubmit();
-                        }
-                      }}
-                    >
-                      <InputOTPGroup>
-                        {Array.from({ length: 6 }).map((_, index) => (
-                          <InputOTPSlot key={index} index={index} />
-                        ))}
-                      </InputOTPGroup>
-                    </InputOTP>
+                  <div className="grid gap-2">
+                    <Label htmlFor="setup-username" className="text-xs">
+                      Username
+                    </Label>
+                    <Input
+                      id="setup-username"
+                      name="setup-username"
+                      placeholder="mis. admin"
+                      autoComplete="username"
+                      disabled={setupLoading}
+                      required
+                    />
                   </div>
-                  {error && (
-                    <p className="mt-3 text-center text-sm text-destructive">
-                      {error}
-                    </p>
-                  )}
+                  <div className="grid gap-2">
+                    <Label htmlFor="setup-password" className="text-xs">
+                      Password (min. 8 karakter)
+                    </Label>
+                    <Input
+                      id="setup-password"
+                      name="setup-password"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      disabled={setupLoading}
+                      required
+                    />
+                  </div>
+                  {error && <p className="text-sm text-destructive">{error}</p>}
                 </CardContent>
-                <CardFooter className="flex-col gap-2 pb-7">
-                  <Button
-                    type="submit"
-                    className="h-11 w-full rounded-lg"
-                    disabled={isLoading || otp.length !== 6}
-                  >
-                    {isLoading ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        Memverifikasi...
-                      </>
-                    ) : (
-                      <>
-                        Verifikasi & masuk
-                        <ArrowRight className="size-4" />
-                      </>
-                    )}
-                  </Button>
+                <CardFooter className="gap-2">
                   <Button
                     type="button"
                     variant="ghost"
-                    onClick={() => setStep("signIn")}
-                    disabled={isLoading}
-                    className="w-full"
+                    onClick={() => {
+                      setShowSetup(false);
+                      setError(null);
+                    }}
+                    disabled={setupLoading}
                   >
-                    Gunakan email lain
+                    Batal
+                  </Button>
+                  <Button type="submit" disabled={setupLoading} className="rounded-lg">
+                    {setupLoading ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" /> Membuat...
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="size-4" /> Buat akun admin
+                      </>
+                    )}
                   </Button>
                 </CardFooter>
               </form>
-            </>
-          )}
-        </Card>
+            </Card>
+          </motion.div>
+        )}
+
         <p className="mt-6 text-center text-xs text-muted-foreground">
           Dengan masuk, kamu menyetujui aturan ujian yang berlaku di sekolahmu.{" "}
           <Link to="/" className="underline underline-offset-4 hover:text-foreground">

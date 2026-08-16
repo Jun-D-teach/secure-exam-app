@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   FileQuestion,
+  GraduationCap,
   LogOut,
   ShieldCheck,
   Timer,
@@ -27,7 +28,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 import type { Doc } from "@/convex/_generated/dataModel";
 
-type Exam = Doc<"exams">;
+type Exam = Doc<"exams"> & { subjectName: string | null };
 type Attempt = Doc<"examAttempts">;
 
 function attemptFor(exam: Exam, attempts: Attempt[] | undefined) {
@@ -78,6 +79,69 @@ function StatusBadge({ attempt, exam }: { attempt: Attempt | undefined; exam: Ex
   );
 }
 
+// One exam entry inside a subject card
+function ExamEntry({ exam, attempt }: { exam: Exam; attempt: Attempt | undefined }) {
+  const availability = examAvailability(exam);
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-background p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-bold tracking-tight">{exam.title}</h3>
+          {exam.description && (
+            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+              {exam.description}
+            </p>
+          )}
+        </div>
+        <StatusBadge attempt={attempt} exam={exam} />
+      </div>
+      <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-muted-foreground">
+        <span className="flex items-center gap-1.5">
+          <Clock3 className="size-3.5 text-primary" />
+          {formatDuration(exam.durationMinutes)}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <ShieldCheck className="size-3.5 text-primary" />
+          Terpantau
+        </span>
+        {(exam.startsAt || exam.endsAt) && (
+          <span className="flex items-center gap-1.5">
+            <CalendarClock className="size-3.5 text-primary" />
+            {exam.startsAt ? `Buka ${formatDateTime(exam.startsAt)}` : "Sudah dibuka"}
+            {exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}
+          </span>
+        )}
+      </div>
+      <div>
+        {attempt ? (
+          <Button asChild className="w-full rounded-lg sm:w-auto">
+            <Link to={`/exam/${exam._id}`}>
+              {attempt.status === "in_progress" ? "Lanjutkan" : "Lihat Hasil"}
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
+        ) : availability.state === "not_yet" ? (
+          <Button disabled className="w-full rounded-lg sm:w-auto">
+            <CalendarClock className="size-4" />
+            Dibuka {formatDateTime(availability.opensAt)}
+          </Button>
+        ) : availability.state === "closed" ? (
+          <Button disabled className="w-full rounded-lg sm:w-auto">
+            Ujian ditutup
+          </Button>
+        ) : (
+          <Button asChild className="w-full rounded-lg sm:w-auto">
+            <Link to={`/exam/${exam._id}`}>
+              Mulai Ujian
+              <ArrowRight className="size-4" />
+            </Link>
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function StudentDashboard() {
   const { user, signOut } = useAuth();
   const exams = useQuery(api.exams.listExams);
@@ -89,6 +153,18 @@ export default function StudentDashboard() {
     await signOut();
     window.location.href = "/";
   };
+
+  // Group published exams by subject ("satu jalur" per mapel, set by admin).
+  const groups: { subjectName: string; exams: Exam[] }[] = [];
+  for (const exam of exams ?? []) {
+    const name = exam.subjectName || "Tanpa mapel";
+    const group = groups.find((g) => g.subjectName === name);
+    if (group) {
+      group.exams.push(exam);
+    } else {
+      groups.push({ subjectName: name, exams: [exam] });
+    }
+  }
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -124,97 +200,48 @@ export default function StudentDashboard() {
               </EmptyMedia>
               <EmptyTitle>Belum ada ujian</EmptyTitle>
               <EmptyDescription>
-                Guru belum membagikan ujian apa pun. Cek kembali nanti — ujian
-                yang tersedia akan muncul di halaman ini.
+                Admin belum menjadwalkan ujian apa pun. Cek kembali nanti —
+                ujian yang tersedia akan muncul di halaman ini.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
-          <div className="grid gap-5 sm:grid-cols-2">
-            {exams.map((exam, i) => {
-              const attempt = attemptFor(exam, attempts);
-              const availability = examAvailability(exam);
-              return (
-                <motion.div
-                  key={exam._id}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.4, delay: i * 0.06 }}
-                >
-                  <Card className="h-full rounded-2xl border-border/70 shadow-sm transition-shadow hover:shadow-md">
-                    <CardContent className="flex h-full flex-col p-6">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                          <FileQuestion className="size-5" />
-                        </div>
-                        <StatusBadge attempt={attempt} exam={exam} />
-                      </div>
-                      <h2 className="mt-4 text-lg font-bold tracking-tight">
-                        {exam.title}
-                      </h2>
-                      {exam.subject && (
-                        <p className="mt-1 text-sm font-medium text-muted-foreground">
-                          {exam.subject}
-                        </p>
-                      )}
-                      {exam.description && (
-                        <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
-                          {exam.description}
-                        </p>
-                      )}
-                      <div className="mt-4 flex items-center gap-4 text-xs font-medium text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <Clock3 className="size-3.5 text-primary" />
-                          {formatDuration(exam.durationMinutes)}
-                        </span>
-                        <span className="flex items-center gap-1.5">
-                          <ShieldCheck className="size-3.5 text-primary" />
-                          Terpantau
-                        </span>
-                      </div>
-                      {(exam.startsAt || exam.endsAt) && (
-                        <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                          <CalendarClock className="size-3.5 shrink-0 text-primary" />
-                          <span>
-                            {exam.startsAt
-                              ? `Buka ${formatDateTime(exam.startsAt)}`
-                              : "Sudah dibuka"}
-                            {exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}
-                          </span>
-                        </div>
-                      )}
-                      <div className="mt-6 flex-1" />
-                      {attempt ? (
-                        <Button asChild className="w-full rounded-lg">
-                          <Link to={`/exam/${exam._id}`}>
-                            {attempt.status === "in_progress"
-                              ? "Lanjutkan"
-                              : "Lihat Hasil"}
-                            <ArrowRight className="size-4" />
-                          </Link>
-                        </Button>
-                      ) : availability.state === "not_yet" ? (
-                        <Button disabled className="w-full rounded-lg">
-                          <CalendarClock className="size-4" />
-                          Dibuka {formatDateTime(availability.opensAt)}
-                        </Button>
-                      ) : availability.state === "closed" ? (
-                        <Button disabled className="w-full rounded-lg">
-                          Ujian ditutup
-                        </Button>
-                      ) : (
-                        <Button asChild className="w-full rounded-lg">
-                          <Link to={`/exam/${exam._id}`}>
-                            Mulai Ujian
-                            <ArrowRight className="size-4" />
-                          </Link>
-                        </Button>
-                      )}
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              );
-            })}
+          <div className="space-y-8">
+            <div>
+              <h2 className="text-lg font-bold tracking-tight">Pilih mapel</h2>
+              <p className="text-sm text-muted-foreground">
+                Pilih mapel untuk mengerjakan ujian yang dijadwalkan.
+              </p>
+            </div>
+            {groups.map((group, gi) => (
+              <motion.section
+                key={group.subjectName}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: gi * 0.06 }}
+              >
+                <div className="mb-4 flex items-center gap-2.5">
+                  <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <GraduationCap className="size-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold tracking-tight">{group.subjectName}</h3>
+                    <p className="text-xs text-muted-foreground">
+                      {group.exams.length} ujian
+                    </p>
+                  </div>
+                </div>
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {group.exams.map((exam) => (
+                    <Card key={exam._id} className="rounded-2xl border-border/70 shadow-sm">
+                      <CardContent className="p-0">
+                        <ExamEntry exam={exam} attempt={attemptFor(exam, attempts)} />
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </motion.section>
+            ))}
           </div>
         )}
       </div>

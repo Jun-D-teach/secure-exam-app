@@ -45,6 +45,7 @@ import {
 } from "@/lib/exam-utils";
 
 type Attempt = Doc<"examAttempts">;
+type Exam = Doc<"exams"> & { subjectName: string | null };
 
 const EXAM_ID_PATTERN = /^[A-Za-z0-9_]{16,}$/;
 
@@ -58,7 +59,7 @@ function ExamIntro({
   startError,
   starting,
 }: {
-  exam: Doc<"exams">;
+  exam: Exam;
   onStart: () => void;
   startError: string | null;
   starting: boolean;
@@ -107,8 +108,8 @@ function ExamIntro({
               </Badge>
             </div>
             <CardTitle className="mt-4 text-2xl tracking-tight">{exam.title}</CardTitle>
-            {exam.subject && (
-              <p className="text-sm font-medium text-muted-foreground">{exam.subject}</p>
+            {exam.subjectName && (
+              <p className="text-sm font-medium text-muted-foreground">{exam.subjectName}</p>
             )}
             {exam.description && (
               <p className="text-sm leading-relaxed text-muted-foreground">
@@ -197,7 +198,7 @@ function ExamInProgress({
   exam,
   attempt,
 }: {
-  exam: Doc<"exams">;
+  exam: Exam;
   attempt: Attempt;
 }) {
   const navigate = useNavigate();
@@ -340,7 +341,7 @@ function ExamInProgress({
           <div className="min-w-0">
             <p className="truncate text-sm font-bold tracking-tight">{exam.title}</p>
             <p className="text-xs text-muted-foreground">
-              {exam.subject || "Ujian"} · {formatDuration(exam.durationMinutes)}
+              {exam.subjectName || "Ujian"} · {formatDuration(exam.durationMinutes)}
             </p>
           </div>
         </div>
@@ -504,7 +505,7 @@ function ExamResult({
   exam,
   attempt,
 }: {
-  exam: Doc<"exams">;
+  exam: Exam;
   attempt: Attempt;
 }) {
   const navigate = useNavigate();
@@ -550,7 +551,7 @@ function ExamResult({
             <div className="rounded-xl border border-border/70 bg-muted/40 p-4">
               <p className="text-sm font-bold">{exam.title}</p>
               <p className="text-xs text-muted-foreground">
-                {exam.subject || "Ujian"} · {formatDuration(exam.durationMinutes)}
+                {exam.subjectName || "Ujian"} · {formatDuration(exam.durationMinutes)}
               </p>
             </div>
             <div className="grid grid-cols-2 gap-3 text-center">

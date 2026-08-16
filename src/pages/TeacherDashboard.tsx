@@ -43,13 +43,20 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useAuth } from "@/hooks/use-auth";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
-type Exam = Doc<"exams">;
+type Exam = Doc<"exams"> & { subjectName: string | null };
 
 // ---------------------------------------------------------------------------
-// Create exam dialog
+// Create exam dialog (draft — admin schedules & publishes)
 // ---------------------------------------------------------------------------
 
 function CreateExamDialog({
@@ -60,6 +67,7 @@ function CreateExamDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const createExam = useMutation(api.exams.createExam);
+  const subjects = useQuery(api.subjects.listSubjects);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,20 +76,17 @@ function CreateExamDialog({
     setIsSubmitting(true);
     setError(null);
     const formData = new FormData(event.currentTarget);
-    const startsAtRaw = String(formData.get("startsAt") || "");
-    const endsAtRaw = String(formData.get("endsAt") || "");
+    const subjectId = String(formData.get("subjectId") || "");
     try {
       await createExam({
         title: String(formData.get("title") || ""),
-        subject: String(formData.get("subject") || "") || undefined,
+        subjectId: subjectId as Doc<"subjects">["_id"],
         durationMinutes: Number(formData.get("durationMinutes") || 60),
         description: String(formData.get("description") || "") || undefined,
         googleFormUrl: String(formData.get("googleFormUrl") || ""),
-        startsAt: startsAtRaw ? new Date(startsAtRaw).getTime() : undefined,
-        endsAt: endsAtRaw ? new Date(endsAtRaw).getTime() : undefined,
       });
-      toast.success("Ujian berhasil dibuat", {
-        description: "Ujian sekarang tersedia untuk siswa.",
+      toast.success("Ujian dibuat sebagai draf", {
+        description: "Admin akan mengatur jadwal & mempublikasikan ujian ini.",
       });
       onOpenChange(false);
     } catch (err) {
@@ -98,8 +103,8 @@ function CreateExamDialog({
         <DialogHeader>
           <DialogTitle>Buat Ujian Baru</DialogTitle>
           <DialogDescription>
-            Tempel link Google Form yang sudah berisi soal. Siswa akan
-            mengerjakannya di dalam aplikasi dengan timer dan pengawasan.
+            Tempel link Google Form yang sudah berisi soal. Ujian dibuat sebagai
+            draf — admin akan mengatur jadwal dan mempublikasikannya.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="grid gap-4">
@@ -115,13 +120,28 @@ function CreateExamDialog({
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label htmlFor="exam-subject">Mata pelajaran</Label>
-              <Input
-                id="exam-subject"
-                name="subject"
-                placeholder="Contoh: Matematika"
-                disabled={isSubmitting}
-              />
+              <Label>Mapel *</Label>
+              <Select
+                name="subjectId"
+                required
+                disabled={isSubmitting || subjects === undefined}
+              >
+                <SelectTrigger className="rounded-lg">
+                  <SelectValue placeholder={subjects?.length ? "Pilih mapel" : "Belum ada mapel"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {(subjects ?? []).map((subject) => (
+                    <SelectItem key={subject._id} value={subject._id}>
+                      {subject.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {subjects?.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Belum ada mapel. Minta admin menambahkan mapel terlebih dahulu.
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="exam-duration">Durasi (menit) *</Label>
@@ -145,38 +165,6 @@ function CreateExamDialog({
               placeholder="Petunjuk singkat untuk siswa (opsional)"
               disabled={isSubmitting}
             />
-          </div>
-          <div className="grid gap-2">
-            <Label>Jadwal buka (opsional)</Label>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="grid gap-2">
-                <Label htmlFor="exam-starts-at" className="text-xs text-muted-foreground">
-                  Buka pada
-                </Label>
-                <Input
-                  id="exam-starts-at"
-                  name="startsAt"
-                  type="datetime-local"
-                  disabled={isSubmitting}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="exam-ends-at" className="text-xs text-muted-foreground">
-                  Tutup pada
-                </Label>
-                <Input
-                  id="exam-ends-at"
-                  name="endsAt"
-                  type="datetime-local"
-                  disabled={isSubmitting}
-                />
-              </div>
-            </div>
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              Kosongkan untuk membuka ujian langsung. “Tutup pada” adalah batas
-              terakhir siswa boleh <span className="font-medium">mulai</span> —
-              ujian yang sudah berjalan tetap lanjut sampai waktunya habis.
-            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="exam-url">Link Google Form *</Label>
@@ -204,14 +192,18 @@ function CreateExamDialog({
             >
               Batal
             </Button>
-            <Button type="submit" disabled={isSubmitting} className="rounded-lg">
+            <Button
+              type="submit"
+              disabled={isSubmitting || !subjects?.length}
+              className="rounded-lg"
+            >
               {isSubmitting ? (
                 <>
                   <Loader2 className="size-4 animate-spin" /> Menyimpan...
                 </>
               ) : (
                 <>
-                  <FilePlus2 className="size-4" /> Buat Ujian
+                  <FilePlus2 className="size-4" /> Buat Draf
                 </>
               )}
             </Button>
@@ -282,7 +274,7 @@ function ParticipantsDialog({
                     <td className="px-4 py-3">
                       <p className="font-medium">{attempt.student?.name || "Tanpa nama"}</p>
                       <p className="text-xs text-muted-foreground">
-                        {attempt.student?.email}
+                        @{attempt.student?.username}
                       </p>
                     </td>
                     <td className="px-4 py-3">
@@ -333,7 +325,14 @@ function ParticipantsDialog({
 // Exam card
 // ---------------------------------------------------------------------------
 
-function ScheduleBadge({ exam }: { exam: Exam }) {
+function ExamStatusBadge({ exam }: { exam: Exam }) {
+  if (!exam.isActive) {
+    return (
+      <Badge variant="secondary" className="rounded-full">
+        <FilePlus2 className="size-3" /> Draf
+      </Badge>
+    );
+  }
   const availability = examAvailability(exam);
   if (availability.state === "not_yet") {
     return (
@@ -372,13 +371,16 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
             <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
               <FileQuestion className="size-5" />
             </div>
-            <Badge variant="secondary" className="rounded-full">
-              {formatDuration(exam.durationMinutes)}
-            </Badge>
+            <div className="flex flex-col items-end gap-1.5">
+              <ExamStatusBadge exam={exam} />
+              <Badge variant="secondary" className="rounded-full">
+                {formatDuration(exam.durationMinutes)}
+              </Badge>
+            </div>
           </div>
           <CardTitle className="mt-3 leading-tight">{exam.title}</CardTitle>
           <p className="text-sm font-medium text-muted-foreground">
-            {exam.subject || "Tanpa mata pelajaran"}
+            {exam.subjectName || "Tanpa mapel"}
           </p>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -386,10 +388,9 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
             <p className="text-xs text-muted-foreground">
               Dibuat {formatDateTime(exam.createdAt)}
             </p>
-            <ScheduleBadge exam={exam} />
           </div>
 
-          {exam.startsAt || exam.endsAt ? (
+          {exam.isActive && (exam.startsAt || exam.endsAt) ? (
             <div className="flex items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground">
               <CalendarClock className="size-3.5 shrink-0 text-primary" />
               <span>
@@ -398,6 +399,11 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
                   : "Buka sekarang"}
                 {exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}
               </span>
+            </div>
+          ) : !exam.isActive ? (
+            <div className="flex items-center gap-1.5 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-300" />
+              Menunggu admin untuk dijadwalkan & dipublikasikan.
             </div>
           ) : null}
 
@@ -523,7 +529,7 @@ export default function TeacherDashboard() {
               <EmptyTitle>Belum ada ujian</EmptyTitle>
               <EmptyDescription>
                 Buat ujian pertama kamu dengan menempelkan link Google Form dan
-                mengatur durasi. Siswa akan langsung bisa mengerjakannya.
+                memilih mapel. Setelah itu admin akan mengatur jadwalnya.
               </EmptyDescription>
               <Button className="mt-2 rounded-lg" onClick={() => setShowCreate(true)}>
                 <FilePlus2 className="size-4" /> Buat Ujian
@@ -538,7 +544,9 @@ export default function TeacherDashboard() {
                   {exams.length} ujian
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Semua ujian yang kamu buat akan tampil di sini.
+                  Ujian yang kamu buat tampil di sini. Yang berstatus{" "}
+                  <span className="font-medium">Draf</span> belum terlihat siswa
+                  sampai admin mengatur jadwalnya.
                 </p>
               </div>
               <Button variant="outline" className="rounded-lg" onClick={() => setShowCreate(true)}>

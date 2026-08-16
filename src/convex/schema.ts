@@ -33,17 +33,34 @@ const schema = defineSchema(
       emailVerificationTime: v.optional(v.number()), // email verification time. do not remove
       isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
 
+      // Login username. Accounts are created by the admin (no self sign-up / OTP),
+      // so this doubles as the login identifier for the password provider.
+      username: v.optional(v.string()),
       role: v.optional(roleValidator), // role of the user. do not remove
-    }).index("email", ["email"]), // index for the email. do not remove or modify
+    })
+      .index("email", ["email"]) // index for the email. do not remove or modify
+      .index("username", ["username"]),
 
-    // Exams created by teachers. The actual questions live in a Google Form;
-    // this app wraps the form with login, timing, and anti-cheat monitoring.
+    // Mapel (subjects) managed by the admin. The admin decides which subjects
+    // exist; teachers attach their exams to one of them.
+    subjects: defineTable({
+      name: v.string(),
+      description: v.optional(v.string()),
+      createdBy: v.id("users"),
+      createdAt: v.number(),
+    }).index("by_name", ["name"]),
+
+    // Exams created by teachers (drafts until the admin schedules & publishes
+    // them). The actual questions live in a Google Form; this app wraps the
+    // form with login, timing, and anti-cheat monitoring.
     exams: defineTable({
       title: v.string(),
-      subject: v.optional(v.string()),
+      subjectId: v.id("subjects"),
       description: v.optional(v.string()),
       googleFormUrl: v.string(),
       durationMinutes: v.number(),
+      // false = draft (created by teacher, awaiting admin schedule);
+      // true = published (visible to students per the schedule window).
       isActive: v.boolean(),
       // Scheduled window: when students may start the exam. Both optional —
       // leave unset for an always-open exam. startsAt = window opens,

@@ -1,6 +1,7 @@
 import { Loader2 } from "lucide-react";
 import { Navigate } from "react-router";
 import { useAuth } from "@/hooks/use-auth";
+import AdminDashboard from "@/pages/AdminDashboard";
 import StudentDashboard from "@/pages/StudentDashboard";
 import TeacherDashboard from "@/pages/TeacherDashboard";
 
@@ -19,6 +20,10 @@ export default function Dashboard() {
     return <Navigate to="/role" replace />;
   }
 
+  if (user.role === "admin") {
+    return <AdminDashboard />;
+  }
+
   if (user.role === "teacher") {
     return <TeacherDashboard />;
   }
@@ -27,6 +32,6 @@ export default function Dashboard() {
     return <StudentDashboard />;
   }
 
-  // Fallback for other legacy roles (admin/member/user)
+  // Fallback for other legacy roles (member/user)
   return <Navigate to="/" replace />;
 }

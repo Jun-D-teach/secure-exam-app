@@ -7,7 +7,7 @@ export function RequireRole({
   role,
   children,
 }: {
-  role: "teacher" | "student";
+  role: "teacher" | "student" | "admin";
   children: ReactNode;
 }) {
   const { isLoading, user } = useAuth();
