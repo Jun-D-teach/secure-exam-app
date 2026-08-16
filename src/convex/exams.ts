@@ -35,22 +35,6 @@ async function subjectName(
   return subject ? subject.name : null;
 }
 
-// Roles --------------------------------------------------------------------------
-
-/** First-login role selection (only for legacy accounts without a role). */
-export const setRole = mutation({
-  args: {
-    role: v.union(v.literal(ROLES.TEACHER), v.literal(ROLES.STUDENT)),
-  },
-  handler: async (ctx, { role }) => {
-    const user = await requireUser(ctx);
-    if (user.role === ROLES.TEACHER || user.role === ROLES.STUDENT) {
-      return; // role already locked in
-    }
-    await ctx.db.patch(user._id, { role });
-  },
-});
-
 // Exams --------------------------------------------------------------------------
 
 /**

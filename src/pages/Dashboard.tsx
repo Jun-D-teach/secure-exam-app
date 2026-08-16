@@ -17,7 +17,9 @@ export default function Dashboard() {
   }
 
   if (!user?.role) {
-    return <Navigate to="/role" replace />;
+    // Every account is created by the admin with a role, so this only
+    // happens for legacy accounts. Send them to the landing page.
+    return <Navigate to="/" replace />;
   }
 
   if (user.role === "admin") {

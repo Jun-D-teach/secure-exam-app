@@ -127,18 +127,18 @@ function ExamMockup() {
 const steps = [
   {
     icon: LogIn,
-    title: "Masuk dengan email",
-    desc: "Guru dan siswa login dengan alamat email masing-masing melalui kode OTP.",
+    title: "Login dengan akun sekolah",
+    desc: "Guru dan siswa login pakai username yang dibuat admin. Tanpa OTP, tanpa mendaftar sendiri.",
   },
   {
     icon: FileText,
-    title: "Guru menyiapkan ujian",
-    desc: "Tempel link Google Form, atur durasi, lalu ujian langsung aktif untuk siswa.",
+    title: "Guru membuat ujian",
+    desc: "Tempel link Google Form, pilih mapel, atur durasi. Admin lalu menjadwalkan dan mempublikasikannya.",
   },
   {
     icon: ShieldCheck,
-    title: "Siswa mengerjakan dengan aman",
-    desc: "Timer berjalan otomatis dan pindah tab terdeteksi serta dicatat guru.",
+    title: "Siswa memilih mapel & mengerjakan",
+    desc: "Siswa memilih mapel dari satu jalur yang diatur admin, dengan timer otomatis dan pengawasan anti-mencontek.",
   },
 ];
 
@@ -160,8 +160,8 @@ const features = [
   },
   {
     icon: GraduationCap,
-    title: "Login per siswa",
-    desc: "Setiap siswa teridentifikasi lewat akunnya, jadi tidak ada yang mengerjakan atas nama orang lain.",
+    title: "Akun dikelola admin",
+    desc: "Admin membuat semua akun guru & siswa — tidak ada yang bisa mendaftar sendiri atau mengerjakan atas nama orang lain.",
   },
 ];
 
@@ -381,9 +381,10 @@ export default function Landing() {
               </div>
               <h3 className="mt-5 text-xl font-bold tracking-tight">Untuk Siswa</h3>
               <p className="mt-2 flex-1 text-sm leading-relaxed text-muted-foreground">
-                Login dengan email, pilih ujian yang tersedia, dan kerjakan
-                langsung di dalam aplikasi. Waktu dihitung mundur otomatis dan
-                semua jawaban dikirim lewat Google Form seperti biasa.
+                Login dengan akun buatan admin, pilih mapel yang tersedia, dan
+                kerjakan langsung di dalam aplikasi. Waktu dihitung mundur
+                otomatis dan semua jawaban dikirim lewat Google Form seperti
+                biasa.
               </p>
               <Button asChild variant="outline" className="mt-6 self-start rounded-lg">
                 <Link to="/auth">
@@ -417,8 +418,9 @@ export default function Landing() {
               Siap mengadakan ujian yang lebih jujur?
             </h2>
             <p className="relative mx-auto mt-4 max-w-xl text-pretty text-primary-foreground/80">
-              Login hanya butuh alamat email. Buat ujian pertama Anda dalam
-              semenit dan bagikan ke siswa.
+              Login hanya butuh username dari admin sekolah. Guru menyiapkan
+              ujian, admin menjadwalkan, siswa mengerjakan — semua dalam satu
+              alur.
             </p>
             <Button
               asChild
