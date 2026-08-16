@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarClock,
   CheckCircle2,
   Clock3,
   EyeOff,
@@ -35,7 +36,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { formatClock, formatDateTime, formatDuration, toGoogleFormEmbedUrl } from "@/lib/exam-utils";
+import {
+  examAvailability,
+  formatClock,
+  formatDateTime,
+  formatDuration,
+  toGoogleFormEmbedUrl,
+} from "@/lib/exam-utils";
 
 type Attempt = Doc<"examAttempts">;
 
@@ -56,6 +63,9 @@ function ExamIntro({
   startError: string | null;
   starting: boolean;
 }) {
+  const availability = examAvailability(exam);
+  const notYet = availability.state === "not_yet";
+  const closed = availability.state === "closed";
   const rules = [
     {
       icon: Timer,
@@ -133,20 +143,44 @@ function ExamIntro({
             </div>
           </CardContent>
           <CardFooter className="flex-col gap-2">
-            <Button className="h-12 w-full rounded-lg" onClick={onStart} disabled={starting}>
-              {starting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" /> Menyiapkan ujian...
-                </>
-              ) : (
-                <>
-                  <Timer className="size-4" /> Mulai Ujian Sekarang
-                </>
-              )}
-            </Button>
+            {notYet || closed ? (
+              <Button className="h-12 w-full rounded-lg" disabled>
+                {notYet ? (
+                  <>
+                    <CalendarClock className="size-4" />
+                    Dibuka {formatDateTime(availability.opensAt)}
+                  </>
+                ) : (
+                  <>
+                    <CalendarClock className="size-4" />
+                    Ujian ditutup
+                  </>
+                )}
+              </Button>
+            ) : (
+              <Button
+                className="h-12 w-full rounded-lg"
+                onClick={onStart}
+                disabled={starting}
+              >
+                {starting ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" /> Menyiapkan ujian...
+                  </>
+                ) : (
+                  <>
+                    <Timer className="size-4" /> Mulai Ujian Sekarang
+                  </>
+                )}
+              </Button>
+            )}
             {startError && <p className="text-sm text-destructive">{startError}</p>}
             <p className="text-xs text-muted-foreground">
-              Setelah dimulai, waktu {formatDuration(exam.durationMinutes)} langsung berjalan.
+              {notYet
+                ? "Ujian dibuka otomatis sesuai jadwal guru. Kembalilah saat waktu buka tiba."
+                : closed
+                  ? "Batas waktu mulai ujian ini sudah lewat."
+                  : `Setelah dimulai, waktu ${formatDuration(exam.durationMinutes)} langsung berjalan.`}
             </p>
           </CardFooter>
         </Card>

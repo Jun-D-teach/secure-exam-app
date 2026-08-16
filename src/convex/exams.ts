@@ -74,6 +74,8 @@ export const createExam = mutation({
     description: v.optional(v.string()),
     googleFormUrl: v.string(),
     durationMinutes: v.number(),
+    startsAt: v.optional(v.number()),
+    endsAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -88,6 +90,13 @@ export const createExam = mutation({
     if (durationMinutes < 1 || durationMinutes > 600) {
       throw new Error("Durasi ujian harus antara 1–600 menit.");
     }
+    if (
+      args.startsAt !== undefined &&
+      args.endsAt !== undefined &&
+      args.endsAt <= args.startsAt
+    ) {
+      throw new Error("Waktu tutup harus setelah waktu buka.");
+    }
     const googleFormUrl = args.googleFormUrl.trim();
     if (!/^https?:\/\//i.test(googleFormUrl)) {
       throw new Error("Link Google Form harus berupa URL yang valid (mulai dengan https://).");
@@ -99,6 +108,8 @@ export const createExam = mutation({
       googleFormUrl,
       durationMinutes,
       isActive: true,
+      startsAt: args.startsAt,
+      endsAt: args.endsAt,
       createdBy: user._id,
       createdAt: Date.now(),
     });
@@ -158,9 +169,24 @@ export const startAttempt = mutation({
       )
       .unique();
     if (existing !== null) {
-      return existing._id; // already started — resume
+      return existing._id; // already started — resume regardless of window
     }
+    // Scheduled window: block new attempts outside [startsAt, endsAt).
+    // In-progress attempts are unaffected — they run until their own timer.
     const now = Date.now();
+    if (exam.startsAt !== undefined && now < exam.startsAt) {
+      throw new Error(
+        `Ujian belum dibuka. Ujian dibuka pada ${new Date(exam.startsAt).toLocaleString("id-ID", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })}.`,
+      );
+    }
+    if (exam.endsAt !== undefined && now >= exam.endsAt) {
+      throw new Error(
+        "Ujian sudah ditutup. Batas waktu mulai sudah lewat.",
+      );
+    }
     return await ctx.db.insert("examAttempts", {
       examId,
       studentId: user._id,

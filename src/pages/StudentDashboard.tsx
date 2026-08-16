@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import {
   ArrowRight,
+  CalendarClock,
   CheckCircle2,
   Clock3,
   FileQuestion,
@@ -24,7 +25,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { useAuth } from "@/hooks/use-auth";
-import { formatDuration } from "@/lib/exam-utils";
+import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 import type { Doc } from "@/convex/_generated/dataModel";
 
 type Exam = Doc<"exams">;
@@ -34,8 +35,23 @@ function attemptFor(exam: Exam, attempts: Attempt[] | undefined) {
   return attempts?.find((a) => a.examId === exam._id);
 }
 
-function StatusBadge({ attempt }: { attempt: Attempt | undefined }) {
+function StatusBadge({ attempt, exam }: { attempt: Attempt | undefined; exam: Exam }) {
   if (!attempt) {
+    const availability = examAvailability(exam);
+    if (availability.state === "not_yet") {
+      return (
+        <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 text-primary">
+          <CalendarClock className="size-3" /> Belum dibuka
+        </Badge>
+      );
+    }
+    if (availability.state === "closed") {
+      return (
+        <Badge variant="outline" className="rounded-full border-destructive/40 bg-destructive/10 text-destructive">
+          <TriangleAlert className="size-3" /> Ditutup
+        </Badge>
+      );
+    }
     return (
       <Badge variant="secondary" className="rounded-full">
         Belum dikerjakan
@@ -118,6 +134,7 @@ export default function StudentDashboard() {
           <div className="grid gap-5 sm:grid-cols-2">
             {exams.map((exam, i) => {
               const attempt = attemptFor(exam, attempts);
+              const availability = examAvailability(exam);
               return (
                 <motion.div
                   key={exam._id}
@@ -131,7 +148,7 @@ export default function StudentDashboard() {
                         <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                           <FileQuestion className="size-5" />
                         </div>
-                        <StatusBadge attempt={attempt} />
+                        <StatusBadge attempt={attempt} exam={exam} />
                       </div>
                       <h2 className="mt-4 text-lg font-bold tracking-tight">
                         {exam.title}
@@ -156,17 +173,44 @@ export default function StudentDashboard() {
                           Terpantau
                         </span>
                       </div>
+                      {(exam.startsAt || exam.endsAt) && (
+                        <div className="mt-3 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <CalendarClock className="size-3.5 shrink-0 text-primary" />
+                          <span>
+                            {exam.startsAt
+                              ? `Buka ${formatDateTime(exam.startsAt)}`
+                              : "Sudah dibuka"}
+                            {exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}
+                          </span>
+                        </div>
+                      )}
                       <div className="mt-6 flex-1" />
-                      <Button asChild className="w-full rounded-lg">
-                        <Link to={`/exam/${exam._id}`}>
-                          {!attempt
-                            ? "Mulai Ujian"
-                            : attempt.status === "in_progress"
+                      {attempt ? (
+                        <Button asChild className="w-full rounded-lg">
+                          <Link to={`/exam/${exam._id}`}>
+                            {attempt.status === "in_progress"
                               ? "Lanjutkan"
                               : "Lihat Hasil"}
-                          <ArrowRight className="size-4" />
-                        </Link>
-                      </Button>
+                            <ArrowRight className="size-4" />
+                          </Link>
+                        </Button>
+                      ) : availability.state === "not_yet" ? (
+                        <Button disabled className="w-full rounded-lg">
+                          <CalendarClock className="size-4" />
+                          Dibuka {formatDateTime(availability.opensAt)}
+                        </Button>
+                      ) : availability.state === "closed" ? (
+                        <Button disabled className="w-full rounded-lg">
+                          Ujian ditutup
+                        </Button>
+                      ) : (
+                        <Button asChild className="w-full rounded-lg">
+                          <Link to={`/exam/${exam._id}`}>
+                            Mulai Ujian
+                            <ArrowRight className="size-4" />
+                          </Link>
+                        </Button>
+                      )}
                     </CardContent>
                   </Card>
                 </motion.div>

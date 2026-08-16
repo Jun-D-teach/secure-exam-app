@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   ExternalLink,
   FilePlus2,
@@ -44,7 +45,7 @@ import {
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/hooks/use-auth";
-import { formatDateTime, formatDuration } from "@/lib/exam-utils";
+import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
 type Exam = Doc<"exams">;
 
@@ -68,6 +69,8 @@ function CreateExamDialog({
     setIsSubmitting(true);
     setError(null);
     const formData = new FormData(event.currentTarget);
+    const startsAtRaw = String(formData.get("startsAt") || "");
+    const endsAtRaw = String(formData.get("endsAt") || "");
     try {
       await createExam({
         title: String(formData.get("title") || ""),
@@ -75,6 +78,8 @@ function CreateExamDialog({
         durationMinutes: Number(formData.get("durationMinutes") || 60),
         description: String(formData.get("description") || "") || undefined,
         googleFormUrl: String(formData.get("googleFormUrl") || ""),
+        startsAt: startsAtRaw ? new Date(startsAtRaw).getTime() : undefined,
+        endsAt: endsAtRaw ? new Date(endsAtRaw).getTime() : undefined,
       });
       toast.success("Ujian berhasil dibuat", {
         description: "Ujian sekarang tersedia untuk siswa.",
@@ -141,6 +146,38 @@ function CreateExamDialog({
               placeholder="Petunjuk singkat untuk siswa (opsional)"
               disabled={isSubmitting}
             />
+          </div>
+          <div className="grid gap-2">
+            <Label>Jadwal buka (opsional)</Label>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="exam-starts-at" className="text-xs text-muted-foreground">
+                  Buka pada
+                </Label>
+                <Input
+                  id="exam-starts-at"
+                  name="startsAt"
+                  type="datetime-local"
+                  disabled={isSubmitting}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="exam-ends-at" className="text-xs text-muted-foreground">
+                  Tutup pada
+                </Label>
+                <Input
+                  id="exam-ends-at"
+                  name="endsAt"
+                  type="datetime-local"
+                  disabled={isSubmitting}
+                />
+              </div>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              Kosongkan untuk membuka ujian langsung. “Tutup pada” adalah batas
+              terakhir siswa boleh <span className="font-medium">mulai</span> —
+              ujian yang sudah berjalan tetap lanjut sampai waktunya habis.
+            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="exam-url">Link Google Form *</Label>
@@ -297,6 +334,29 @@ function ParticipantsDialog({
 // Exam card
 // ---------------------------------------------------------------------------
 
+function ScheduleBadge({ exam }: { exam: Exam }) {
+  const availability = examAvailability(exam);
+  if (availability.state === "not_yet") {
+    return (
+      <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 text-primary">
+        <CalendarClock className="size-3" /> Belum dibuka
+      </Badge>
+    );
+  }
+  if (availability.state === "closed") {
+    return (
+      <Badge variant="outline" className="rounded-full border-destructive/40 bg-destructive/10 text-destructive">
+        <AlertTriangle className="size-3" /> Ditutup
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="rounded-full border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+      <CheckCircle2 className="size-3" /> Terbuka
+    </Badge>
+  );
+}
+
 function ExamCard({ exam, index }: { exam: Exam; index: number }) {
   const summary = useQuery(api.exams.attemptsSummary, { examId: exam._id });
   const [showParticipants, setShowParticipants] = useState(false);
@@ -323,9 +383,24 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
           </p>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <p className="text-xs text-muted-foreground">
-            Dibuat {formatDateTime(exam.createdAt)}
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              Dibuat {formatDateTime(exam.createdAt)}
+            </p>
+            <ScheduleBadge exam={exam} />
+          </div>
+
+          {exam.startsAt || exam.endsAt ? (
+            <div className="flex items-center gap-1.5 rounded-lg bg-muted/60 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <CalendarClock className="size-3.5 shrink-0 text-primary" />
+              <span>
+                {exam.startsAt
+                  ? `Buka ${formatDateTime(exam.startsAt)}`
+                  : "Buka sekarang"}
+                {exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}
+              </span>
+            </div>
+          ) : null}
 
           <Separator />
 

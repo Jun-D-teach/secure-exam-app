@@ -45,6 +45,12 @@ const schema = defineSchema(
       googleFormUrl: v.string(),
       durationMinutes: v.number(),
       isActive: v.boolean(),
+      // Scheduled window: when students may start the exam. Both optional —
+      // leave unset for an always-open exam. startsAt = window opens,
+      // endsAt = last moment a new attempt may begin (in-progress attempts
+      // keep running until their own timer ends).
+      startsAt: v.optional(v.number()),
+      endsAt: v.optional(v.number()),
       createdBy: v.id("users"),
       createdAt: v.number(),
     }).index("by_creator", ["createdBy"]),
