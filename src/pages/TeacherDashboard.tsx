@@ -7,6 +7,7 @@ import {
   FilePlus2,
   FileQuestion,
   GraduationCap,
+  KeyRound,
   Loader2,
   LogOut,
   Timer,
@@ -17,6 +18,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
+import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -473,6 +475,7 @@ export default function TeacherDashboard() {
   const { user, signOut } = useAuth();
   const exams = useQuery(api.exams.listExams);
   const [showCreate, setShowCreate] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
@@ -501,6 +504,15 @@ export default function TeacherDashboard() {
               onClick={() => setShowCreate(true)}
             >
               <FilePlus2 className="size-4" /> Buat Ujian
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={() => setShowPassword(true)}
+            >
+              <KeyRound className="size-4" />
+              <span className="hidden sm:inline">Ubah Password</span>
             </Button>
             <Button
               variant="outline"
@@ -563,6 +575,7 @@ export default function TeacherDashboard() {
       </div>
 
       <CreateExamDialog open={showCreate} onOpenChange={setShowCreate} />
+      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
     </main>
   );
 }

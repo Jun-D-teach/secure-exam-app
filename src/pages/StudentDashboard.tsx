@@ -6,13 +6,16 @@ import {
   Clock3,
   FileQuestion,
   GraduationCap,
+  KeyRound,
   LogOut,
   ShieldCheck,
   Timer,
   TriangleAlert,
 } from "lucide-react";
 import { useQuery } from "convex/react";
+import { useState } from "react";
 import { Link } from "react-router";
+import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
 import { api } from "@/convex/_generated/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -146,6 +149,7 @@ export default function StudentDashboard() {
   const { user, signOut } = useAuth();
   const exams = useQuery(api.exams.listExams);
   const attempts = useQuery(api.exams.myAttempts);
+  const [showPassword, setShowPassword] = useState(false);
 
   const firstName = user?.name?.split(" ")[0] || "Siswa";
 
@@ -176,14 +180,25 @@ export default function StudentDashboard() {
             </p>
             <h1 className="text-sm font-bold tracking-tight">Ujian Saya</h1>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-lg"
-            onClick={handleSignOut}
-          >
-            <LogOut className="size-4" /> Keluar
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={() => setShowPassword(true)}
+            >
+              <KeyRound className="size-4" />
+              <span className="hidden sm:inline">Ubah Password</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={handleSignOut}
+            >
+              <LogOut className="size-4" /> Keluar
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -245,6 +260,8 @@ export default function StudentDashboard() {
           </div>
         )}
       </div>
+
+      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
     </main>
   );
 }

@@ -1,4 +1,11 @@
-import { createAccount, getAuthUserId } from "@convex-dev/auth/server";
+import {
+  createAccount,
+  getAuthSessionId,
+  getAuthUserId,
+  invalidateSessions,
+  modifyAccountCredentials,
+  retrieveAccount,
+} from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import {
   action,
@@ -186,6 +193,54 @@ export const createUser = action({
         email: uname,
         role,
       },
+    });
+  },
+});
+
+/**
+ * A user (student/teacher/admin) changes their own password.
+ * Verifies the current password, stores the new one (hashed by the auth
+ * library), and signs out every other session so old logins stop working.
+ */
+export const changeMyPassword = action({
+  args: {
+    currentPassword: v.string(),
+    newPassword: v.string(),
+  },
+  handler: async (ctx, { currentPassword, newPassword }) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      throw new Error("Kamu belum masuk.");
+    }
+    const user = await ctx.runQuery(internal.users.getUserById, { userId });
+    if (user === null || !user.username) {
+      throw new Error("Pengguna tidak ditemukan.");
+    }
+    if (newPassword.length < 8) {
+      throw new Error("Password baru minimal 8 karakter.");
+    }
+    if (newPassword === currentPassword) {
+      throw new Error("Password baru harus berbeda dari password lama.");
+    }
+    // Verifikasi password lama — melempar error bila tidak cocok.
+    try {
+      await retrieveAccount(ctx, {
+        provider: "password",
+        account: { id: user.username, secret: currentPassword },
+      });
+    } catch {
+      throw new Error("Password lama salah. Coba lagi.");
+    }
+    // Simpan password baru (di-hash oleh library auth).
+    await modifyAccountCredentials(ctx, {
+      provider: "password",
+      account: { id: user.username, secret: newPassword },
+    });
+    // Keluarkan sesi lain agar akun lama tidak bisa dipakai di perangkat lain.
+    const sessionId = await getAuthSessionId(ctx);
+    await invalidateSessions(ctx, {
+      userId,
+      except: sessionId !== null ? [sessionId] : undefined,
     });
   },
 });
