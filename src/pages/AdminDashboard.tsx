@@ -5,10 +5,12 @@ import {
   CalendarClock,
   CheckCircle2,
   GraduationCap,
+  KeyRound,
   Loader2,
   LogOut,
   ShieldCheck,
   Trash2,
+  Upload,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -51,6 +53,8 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
+import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
+import { ImportUsersDialog } from "@/components/ImportUsersDialog";
 import { useAuth } from "@/hooks/use-auth";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
@@ -68,6 +72,8 @@ function AccountsSection() {
   const deleteUser = useMutation(api.users.deleteUser);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -106,14 +112,24 @@ function AccountsSection() {
 
   return (
     <Card className="rounded-2xl border-border/70 shadow-sm">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base tracking-tight">
-          <Users className="size-4 text-primary" /> Akun Guru & Siswa
-        </CardTitle>
-        <CardDescription>
-          Buat akun login untuk guru dan siswa. Password awal minimal 8 karakter
-          — bagikan ke pemilik akun.
-        </CardDescription>
+      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base tracking-tight">
+            <Users className="size-4 text-primary" /> Akun Guru & Siswa
+          </CardTitle>
+          <CardDescription>
+            Buat akun satu per satu atau impor banyak nama sekaligus. Password
+            awal minimal 8 karakter — bagikan ke pemilik akun.
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0 rounded-lg"
+          onClick={() => setShowImport(true)}
+        >
+          <Upload className="size-4" /> Import
+        </Button>
       </CardHeader>
       <CardContent className="grid gap-6">
         <form
@@ -230,6 +246,9 @@ function AccountsSection() {
           </div>
         )}
       </CardContent>
+
+      <ImportUsersDialog open={showImport} onOpenChange={setShowImport} />
+      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
     </Card>
   );
 }
@@ -607,6 +626,7 @@ function ScheduleSection() {
 
 export default function AdminDashboard() {
   const { user, signOut } = useAuth();
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
@@ -628,14 +648,25 @@ export default function AdminDashboard() {
               <h1 className="text-sm font-bold tracking-tight">Kelola Sekolah</h1>
             </div>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="rounded-lg"
-            onClick={handleSignOut}
-          >
-            <LogOut className="size-4" /> Keluar
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={() => setShowPassword(true)}
+            >
+              <KeyRound className="size-4" />
+              <span className="hidden sm:inline">Ubah Password</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={handleSignOut}
+            >
+              <LogOut className="size-4" /> Keluar
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -681,6 +712,8 @@ export default function AdminDashboard() {
           </motion.div>
         </div>
       </div>
+
+      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
     </main>
   );
 }
