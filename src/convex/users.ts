@@ -71,6 +71,20 @@ export const getUserByUsername = internalQuery({
   },
 });
 
+export const listUsernames = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    const usernames: string[] = [];
+    for (const user of users) {
+      if (user.username) {
+        usernames.push(user.username);
+      }
+    }
+    return usernames;
+  },
+});
+
 export const hasAdminRow = internalQuery({
   args: {},
   handler: async (ctx) => {
@@ -194,6 +208,131 @@ export const createUser = action({
         role,
       },
     });
+  },
+});
+
+const USERNAME_MAX = 32;
+
+function slugifyName(name: string): string {
+  let slug = name
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.+|\.+$/g, "")
+    .replace(/\.{2,}/g, ".");
+  if (slug.length === 0) slug = "user";
+  if (slug.length < 3) slug = (slug + "u".repeat(3)).slice(0, 3);
+  if (slug.length > USERNAME_MAX) {
+    slug = slug.slice(0, USERNAME_MAX).replace(/\.+$/g, "");
+  }
+  return slug;
+}
+
+function pickRandom(chars: string): string {
+  return chars[Math.floor(Math.random() * chars.length)];
+}
+
+function shuffle(chars: string[]): string[] {
+  const arr = [...chars];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/** Generates an 8-character password: 5 letters + 3 digits, no ambiguous chars. */
+function generatePassword(): string {
+  const letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ";
+  const digits = "23456789";
+  const parts = [
+    ...Array.from({ length: 5 }, () => pickRandom(letters)),
+    ...Array.from({ length: 3 }, () => pickRandom(digits)),
+  ];
+  return shuffle(parts).join("");
+}
+
+/**
+ * Admin bulk-imports teacher/student accounts from a list of names.
+ * Usernames and initial passwords are generated automatically (or taken from
+ * the items when provided). Returns the created credentials exactly once so
+ * the admin can share them with each account owner.
+ */
+export const importUsers = action({
+  args: {
+    role: v.union(v.literal(ROLES.TEACHER), v.literal(ROLES.STUDENT)),
+    items: v.array(
+      v.object({
+        name: v.string(),
+        username: v.optional(v.string()),
+        password: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, { role, items }) => {
+    await requireAdminAction(ctx);
+    if (items.length === 0) {
+      throw new Error("Tidak ada data untuk diimpor.");
+    }
+    if (items.length > 200) {
+      throw new Error("Maksimal 200 akun per import.");
+    }
+
+    const existing = new Set<string>();
+    const usernames = await ctx.runQuery(internal.users.listUsernames);
+    for (const username of usernames) {
+      existing.add(username);
+    }
+
+    // Validate & normalize every row up front so a bad row never leaves a
+    // partially-imported batch behind.
+    const normalized: { name: string; username: string; password: string }[] = [];
+    for (const item of items) {
+      const name = item.name.trim();
+      if (!name) {
+        throw new Error("Ada baris dengan nama kosong.");
+      }
+      let username: string;
+      if (item.username && item.username.trim()) {
+        username = normalizeUsername(item.username);
+        if (existing.has(username) || normalized.some((r) => r.username === username)) {
+          throw new Error(`Username \"${username}\" sudah dipakai.`);
+        }
+      } else {
+        const base = slugifyName(name);
+        username = base;
+        let n = 2;
+        while (existing.has(username) || normalized.some((r) => r.username === username)) {
+          const suffix = `-${n}`;
+          username = base.slice(0, USERNAME_MAX - suffix.length) + suffix;
+          n++;
+        }
+      }
+      existing.add(username);
+      const password =
+        item.password && item.password.trim() ? item.password : generatePassword();
+      if (password.length < 8) {
+        throw new Error(`Password untuk \"${name}\" minimal 8 karakter.`);
+      }
+      normalized.push({ name: name || username, username, password });
+    }
+
+    const created: { name: string; username: string; password: string }[] = [];
+    for (const row of normalized) {
+      await createAccount(ctx, {
+        provider: "password",
+        account: { id: row.username, secret: row.password },
+        profile: {
+          name: row.name,
+          username: row.username,
+          email: row.username,
+          role,
+        },
+      });
+      created.push(row);
+    }
+    return created;
   },
 });
 
