@@ -150,6 +150,13 @@ class ApiClient {
     });
   }
 
+  async updateProfile(data: { name?: string; username?: string }) {
+    return this.request<{
+      message: string;
+      token?: string;
+    }>("/api/auth/me", { method: "PUT", body: data });
+  }
+
   logout() {
     this.setToken(null);
   }

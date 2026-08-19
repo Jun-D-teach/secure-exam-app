@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Trash2,
   Upload,
+  UserCog,
   UserPlus,
   Users,
 } from "lucide-react";
@@ -52,6 +53,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
+import { EditProfileDialog } from "@/components/EditProfileDialog";
 import { ImportUsersDialog } from "@/components/ImportUsersDialog";
 import { useAuth } from "@/hooks/use-auth";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
@@ -690,12 +692,19 @@ function ScheduleSection() {
 // ---------------------------------------------------------------------------
 
 export default function AdminDashboard() {
-  const { user, signOut } = useAuth();
+  const { user, setUser, signOut } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
 
   const handleSignOut = async () => {
     await signOut();
     window.location.href = "/";
+  };
+
+  const handleProfileUpdated = (name: string, username: string, token?: string) => {
+    if (user) {
+      setUser({ ...user, name, username });
+    }
   };
 
   return (
@@ -714,6 +723,15 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={() => setShowEditProfile(true)}
+            >
+              <UserCog className="size-4" />
+              <span className="hidden sm:inline">Edit Profil</span>
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -779,6 +797,13 @@ export default function AdminDashboard() {
       </div>
 
       <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
+      <EditProfileDialog
+        open={showEditProfile}
+        onOpenChange={setShowEditProfile}
+        currentName={user?.name || ""}
+        currentUsername={user?.username || ""}
+        onUpdated={handleProfileUpdated}
+      />
     </main>
   );
 }
