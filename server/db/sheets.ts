@@ -1,7 +1,7 @@
 import { google } from "googleapis";
 
 // Google Sheets configuration
-const SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID || "";
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || process.env.GOOGLE_SPREADSHEET_ID || "";
 const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n") || "";
 

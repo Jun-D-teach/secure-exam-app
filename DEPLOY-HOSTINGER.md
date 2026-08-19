@@ -1,22 +1,16 @@
 # 🚀 Deploy UjianKita ke Hostinger
 
-## Arsitektur Setelah Migrasi
+## Arsitektur
 
 ```
-┌─────────────────────────────────────────────┐
-│                Hostinger VPS                 │
-│                                              │
-│  ┌──────────────┐    ┌──────────────────┐   │
-│  │  Express.js   │───▶│  Google Sheets   │   │
-│  │  (Port 3001)  │    │  (Database)      │   │
-│  └──────┬───────┘    └──────────────────┘   │
-│         │                                    │
-│  ┌──────▼───────┐                            │
-│  │  Vite Build   │                            │
-│  │  (dist/)      │                            │
-│  └──────────────┘                            │
-└─────────────────────────────────────────────┘
+Browser (React SPA) → Express.js Server → Google Sheets API
+                            ↓
+                    Hostinger Node.js Hosting
 ```
+
+Express server serve **semuanya**: API routes + frontend static files dari satu port.
+
+---
 
 ## Langkah 1: Persiapan Google Sheets
 
@@ -28,329 +22,201 @@
 ### 1.2 Buat Service Account
 1. Buka **IAM & Admin** → **Service Accounts**
 2. Klik **Create Service Account**
-3. Beri nama (misal: `ujiankita-db`)
+3. Beri nama (misal: `exam-secure-app`)
 4. Klik **Create and Continue**
-5. Beri role **Editor** (atau minimal **Owner** untuk akses Sheets)
-6. Klik **Done**
-7. Klik service account yang baru dibuat
-8. Buka tab **Keys** → **Add Key** → **Create new key**
-9. Pilih **JSON** → Download
+5. Role: **Editor** → **Done**
+6. Klik service account → tab **Keys** → **Add Key** → **Create new key**
+7. Pilih **JSON** → Download
 
 ### 1.3 Buat Google Spreadsheet
 1. Buka https://sheets.google.com
-2. Buat spreadsheet baru, beri nama "UjianKita Database"
+2. Buat spreadsheet baru: "UjianKita Database"
 3. Copy **Spreadsheet ID** dari URL:
    ```
    https://docs.google.com/spreadsheets/d/[SPREADSHEET_ID]/edit
    ```
 
-### 1.4 Share Spreadsheet ke Service Account
-1. Buka spreadsheet yang baru dibuat
-2. Klik **Share**
-3. Tambahkan email service account dari langkah 1.2 (format: `ujiankita-db@project.iam.gserviceaccount.com`)
-4. Beri akses **Editor**
-5. Klik **Share**
+### 1.4 Share ke Service Account
+1. Buka spreadsheet → **Share**
+2. Tambah email service account (format: `xxx@project.iam.gserviceaccount.com`)
+3. Akses: **Editor** → **Share**
 
-### 1.5 Siapkan Sheet Tabs
-Buat 4 sheet tabs di spreadsheet:
-- `users` - Data pengguna
-- `subjects` - Mata pelajaran
-- `exams` - Ujian
-- `attempts` - Percobaan ujian
+### 1.5 Buat Sheet Tabs
+Buat 4 sheet tabs:
 
-**Baris pertama (header) masing-masing sheet:**
-
-**users:**
+**users** (header baris 1):
 ```
 id | name | username | password_hash | role | created_at
 ```
 
-**subjects:**
+**subjects**:
 ```
 id | name | description | created_by | created_at
 ```
 
-**exams:**
+**exams**:
 ```
 id | title | subject_id | description | google_form_url | duration_minutes | is_active | starts_at | ends_at | created_by | created_at
 ```
 
-**attempts:**
+**attempts**:
 ```
 id | exam_id | student_id | status | started_at | ends_at | completed_at | violation_count | violations
 ```
 
+> ⚠️ Headers harus persis seperti di atas. Aplikasi otomatis membuat tabs jika belum ada.
+
 ---
 
-## Langkah 2: Setup Hostinger VPS
+## Langkah 2: Push ke GitHub
 
-### 2.1 Akses VPS
 ```bash
-ssh root@IP_ANDA
-```
-
-### 2.2 Install Dependencies
-```bash
-# Update system
-apt update && apt upgrade -y
-
-# Install Node.js 20.x
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt install -y nodejs
-
-# Install PM2 (process manager)
-npm install -g pm2
-
-# Install Git
-apt install -y git
-
-# Install Bun (untuk build frontend)
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc
-```
-
-### 2.3 Clone Repository
-```bash
-cd /var/www
-git clone https://github.com/YOUR_USERNAME/ujiankita.git
-cd ujiankita
+git add -A
+git commit -m "Deploy to Hostinger"
+git push origin main
 ```
 
 ---
 
-## Langkah 3: Konfigurasi Environment
+## Langkah 3: Setup di Hostinger Panel
 
-### 3.1 Buat File .env di Root Project
-```bash
-nano .env
+### 3.1 Pilih Framework
+Di Hostinger panel → **Pengaturan dan deploy ulang**:
+- **Preset framework**: pilih **Express**
+- Klik **Ubah**
+
+### 3.2 Build Command
+Set build command ke:
+```
+npm install && npx tsc -b && npx vite build
 ```
 
-Isi dengan:
-```env
-# Server
-PORT=3001
-NODE_ENV=production
+> Build script akan:
+> 1. Install semua dependencies (termasuk devDependencies untuk TypeScript)
+> 2. Compile TypeScript (type checking)
+> 3. Build frontend ke folder `dist/`
 
-# JWT Secret (generate sendiri!)
-JWT_SECRET=your-super-secret-jwt-key-change-this-to-random-string
-
-# Google Sheets
-GOOGLE_SHEET_ID=your-spreadsheet-id-here
-GOOGLE_SERVICE_ACCOUNT_EMAIL=ujiankita-db@your-project.iam.gserviceaccount.com
-GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY_HERE\n-----END PRIVATE KEY-----"
-
-# Frontend
-VITE_API_URL=
+### 3.3 Start Command
+Set start command / entry point ke:
+```
+npx tsx server/index.ts
 ```
 
-### 3.2 Buat File .env untuk Server
-```bash
-nano server/.env
-```
+> Server Express akan:
+> 1. Listen di port yang ditentukan (biasanya 3000 atau 3001)
+> 2. Serve API routes di `/api/*`
+> 3. Serve frontend SPA dari `dist/`
 
-Isi yang sama seperti di atas.
+### 3.4 Environment Variables
+Set di Hostinger panel (atau file `.env`):
 
-### 3.3 Generate JWT Secret yang Kuat
+| Variable | Value |
+|----------|-------|
+| `PORT` | `3001` (atau port yang ditentukan Hostinger) |
+| `NODE_ENV` | `production` |
+| `JWT_SECRET` | *(generate baru — lihat di bawah)* |
+| `GOOGLE_SHEET_ID` | `1jHpzXrNdjkdIW4QjLaCl6S8d1-obvz8lztvhiqJ7pYQ` |
+| `GOOGLE_SERVICE_ACCOUNT_EMAIL` | `exam-secure-app@polar-automata-468801-u9.iam.gserviceaccount.com` |
+| `GOOGLE_PRIVATE_KEY` | *(paste dari .env kamu)* |
+| `ADMIN_RESET_KEY` | *(buat secret key untuk reset admin)* |
+
+**Generate JWT_SECRET:**
 ```bash
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```
-Gunakan outputnya sebagai nilai `JWT_SECRET`.
+
+### 3.5 Deploy
+Klik **Deploy ulang** / **Redeploy**
 
 ---
 
-## Langkah 4: Build & Deploy
+## Langkah 4: Verifikasi
 
-### 4.1 Install Dependencies
-```bash
-# Install frontend dependencies
-bun install
-
-# Install backend dependencies
-cd server
-npm install
-cd ..
+### Cek Server
+Buka browser, akses:
+```
+https://domain-kamu.com/api/health
 ```
 
-### 4.2 Build Frontend
-```bash
-bun run build
+Response yang benar:
+```json
+{"status":"ok","timestamp":1234567890}
 ```
 
-### 4.3 Build Backend (opsional, bisa pakai tsx langsung)
-```bash
-cd server
-npx tsc -p tsconfig.json
-cd ..
-```
-
-### 4.4 Start Server dengan PM2
-```bash
-# Jalankan backend
-pm2 start server/index.ts --name ujiankita-api --interpreter tsx
-
-# Atau jika sudah di-build:
-# pm2 start server/dist/index.js --name ujiankita-api
-
-# Simpan konfigurasi PM2
-pm2 save
-pm2 startup
-```
-
-### 4.5 Cek Status
-```bash
-pm2 status
-pm2 logs ujiankita-api
-```
-
----
-
-## Langkah 5: Konfigurasi Nginx (Reverse Proxy)
-
-### 5.1 Buat Config Nginx
-```bash
-nano /etc/nginx/sites-available/ujiankita
-```
-
-Isi:
-```nginx
-server {
-    listen 80;
-    server_name domainanda.com www.domainanda.com;
-
-    # Frontend (static files)
-    location / {
-        root /var/www/ujiankita/dist;
-        try_files $uri $uri/ /index.html;
-    }
-
-    # API Backend
-    location /api/ {
-        proxy_pass http://localhost:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-```
-
-### 5.2 Aktifkan Config
-```bash
-ln -s /etc/nginx/sites-available/ujiankita /etc/nginx/sites-enabled/
-nginx -t
-systemctl restart nginx
-```
-
----
-
-## Langkah 6: SSL Certificate (HTTPS)
-
-### Install Certbot
-```bash
-apt install -y certbot python3-certbot-nginx
-certbot --nginx -d domainanda.com -d www.domainanda.com
-```
-
----
-
-## Langkah 7: Setup Admin Pertama
-
-1. Buka browser, akses `https://domainanda.com`
+### Cek Login
+1. Buka `https://domain-kamu.com`
 2. Klik **Login**
-3. Jika belum ada admin, akan muncul form bootstrap admin
-4. Isi: Nama, Username, Password
-5. Login sebagai admin
-6. Buat akun guru dan siswa melalui dashboard admin
+3. Jika belum ada admin → form "Buat Akun Admin Pertama" muncul
+4. Isi nama, username, password → Login
+
+### Cek Google Sheets
+Buka spreadsheet kamu → tab `Users` → seharusnya ada baris admin yang baru dibuat.
 
 ---
 
 ## Troubleshooting
 
 ### Build error: "tsc not found" atau "vite not found"
-Hostinger sering menjalankan `npm install --production` yang melewati `devDependencies`. Script `build` di `package.json` sudah diupdate untuk menjalankan `npm install` (full install) dulu sebelum build. Jika masih error, atur custom build command di Hostinger panel ke:
-```
-npm install && npx tsc -b && npx vite build
-```
+Hostinger mungkin menjalankan `npm install --production`. Build command sudah include `npm install` untuk install semua dependencies. Jika masih error, pastikan:
+- Build command: `npm install && npx tsc -b && npx vite build`
 
-### Server tidak mau jalan
-```bash
-pm2 logs ujiankita-api
-# Cek error di log
-```
+### Login button tidak aktif / tidak bisa klik
+- Cek apakah server backend berjalan: akses `/api/health`
+- Jika tidak bisa diakses, server belum jalan → cek log di Hostinger panel
+
+### Error "Server backend belum berjalan"
+Artinya Express server belum start. Cek:
+1. Start command benar: `npx tsx server/index.ts`
+2. Port sudah benar
+3. Log errors di Hostinger panel
 
 ### Google Sheets error
-1. Pastikan Service Account email sudah di-share ke spreadsheet
-2. Pastikan Spreadsheet ID benar
-3. Pastikan Private Key lengkap (dengan `\n` yang benar)
+1. Service account sudah di-share ke spreadsheet (Editor access)
+2. Spreadsheet ID benar
+3. Private Key lengkap (dengan `\n` yang benar)
+4. 4 tabs sudah ada (users, subjects, exams, attempts)
 
-### Port sudah terpakai
-```bash
-lsof -i :3001
-# Kill process yang menggunakan port tersebut
-kill -9 PID
-```
-
-### Nginx 502 Bad Gateway
-```bash
-# Pastikan server berjalan
-pm2 status
-
-# Cek port
-netstat -tlnp | grep 3001
-```
+### CORS errors
+Server sudah include CORS middleware. Jika masih error, pastikan前端 akses backend dari URL yang sama (satu domain).
 
 ---
 
-## Struktur File di VPS
+## Struktur Deploy
 
 ```
-/var/www/ujiankita/
+hostinger-root/
 ├── .env                    # Environment variables
-├── package.json
-├── dist/                   # Frontend build output
-├── server/
-│   ├── .env                # Backend env (copy dari root)
+├── package.json            # Dependencies + scripts
+├── dist/                   # Frontend build output (Vite)
+│   ├── index.html
+│   └── assets/
+├── server/                 # Backend source
 │   ├── index.ts            # Express server entry
-│   ├── db/
-│   │   └── sheets.ts       # Google Sheets integration
+│   ├── db/sheets.ts        # Google Sheets API
 │   ├── routes/
-│   │   ├── auth.ts
-│   │   ├── users.ts
-│   │   ├── subjects.ts
-│   │   ├── exams.ts
-│   │   └── attempts.ts
-│   └── middleware/
-│       └── auth.ts
-└── src/                    # Frontend source
+│   │   ├── auth.ts         # Login, register, change password
+│   │   ├── users.ts        # CRUD users + import
+│   │   ├── subjects.ts     # CRUD subjects
+│   │   ├── exams.ts        # CRUD exams + scheduling
+│   │   └── attempts.ts     # Start/complete/expire attempts
+│   └── middleware/auth.ts   # JWT auth middleware
+└── src/                    # Frontend source (React + Vite)
 ```
 
 ---
 
 ## Update Aplikasi
 
-Saat ada update baru:
-```bash
-cd /var/www/ujiankita
-git pull origin main
-
-# Rebuild frontend
-bun install
-bun run build
-
-# Restart server
-pm2 restart ujiankita-api
-```
+1. Push perubahan ke GitHub
+2. Di Hostinger → **Deploy ulang**
+3. Server otomatis rebuild dan restart
 
 ---
 
 ## Catatan Penting
 
-1. **Jangan commit file .env ke Git** - tambahkan ke .gitignore
-2. **Backup Google Spreadsheet secara berkala** - export ke Excel
-3. **Gunakan HTTPS** - wajib untuk keamanan data siswa
-4. **Monitor usage** - cek Google Sheets API quota di Google Cloud Console
-5. **Google Sheets API Limit**: 300 requests per menit per project
+1. **Jangan commit `.env` ke Git** — sudah di `.gitignore`
+2. **Backup Google Spreadsheet** — download ke Excel secara berkala
+3. **Google Sheets API limit** — 300 requests/menit (cukup untuk 900 siswa/hari)
+4. **JWT_SECRET harus unik** — jangan pakai placeholder
+5. **HTTPS** — pastikan Hostinger SSL aktif (biasanya otomatis)

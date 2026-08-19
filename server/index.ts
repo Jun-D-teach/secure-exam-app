@@ -2,12 +2,16 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import fs from "fs";
-import { initializeSpreadsheet } from "./db/sheets";
-import authRoutes from "./routes/auth";
-import userRoutes from "./routes/users";
-import subjectRoutes from "./routes/subjects";
-import examRoutes from "./routes/exams";
-import attemptRoutes from "./routes/attempts";
+import { fileURLToPath } from "url";
+import { initializeSpreadsheet } from "./db/sheets.js";
+import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/users.js";
+import subjectRoutes from "./routes/subjects.js";
+import examRoutes from "./routes/exams.js";
+import attemptRoutes from "./routes/attempts.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -25,11 +29,12 @@ app.use("/api/attempts", attemptRoutes);
 
 // Serve static frontend files in production
 if (process.env.NODE_ENV === "production") {
-  // Try multiple possible dist locations for different hosting setups
+  // When compiled, __dirname = dist-server/, so project root = ../
+  // Also check process.cwd() for different hosting setups
   const possiblePaths = [
-    path.join(process.cwd(), "dist"),
-    path.join(__dirname, "../dist"),
-    path.join(process.cwd(), "public"),
+    path.join(__dirname, "../dist"),       // dist-server/../dist = dist/
+    path.join(process.cwd(), "dist"),      // project root/dist
+    path.join(__dirname, "../../dist"),     // fallback: deeper nesting
   ];
 
   let frontendPath = possiblePaths[0];
@@ -44,10 +49,8 @@ if (process.env.NODE_ENV === "production") {
   app.use(express.static(frontendPath));
 
   // SPA fallback - serve index.html for all non-API routes
-  app.get("*", (req, res) => {
-    if (!req.path.startsWith("/api")) {
-      res.sendFile(path.join(frontendPath, "index.html"));
-    }
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(frontendPath, "index.html"));
   });
 }
 
