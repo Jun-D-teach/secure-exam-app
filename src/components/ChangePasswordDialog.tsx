@@ -1,8 +1,7 @@
 import { KeyRound, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { useAction } from "convex/react";
 import { toast } from "sonner";
-import { api } from "@/convex/_generated/api";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,7 +21,6 @@ export function ChangePasswordDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const changeMyPassword = useAction(api.users.changeMyPassword);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +38,7 @@ export function ChangePasswordDialog({
       return;
     }
     try {
-      await changeMyPassword({ currentPassword, newPassword });
+      await api.changePassword(currentPassword, newPassword);
       toast.success("Password berhasil diubah", {
         description: "Mulai sekarang gunakan password baru untuk masuk.",
       });

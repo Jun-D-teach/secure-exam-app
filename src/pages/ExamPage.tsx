@@ -16,9 +16,6 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
-import { useMutation, useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { api, type Exam, type Attempt } from "@/lib/api";
 import {
   examAvailability,
   formatClock,
@@ -43,11 +41,6 @@ import {
   formatDuration,
   toGoogleFormEmbedUrl,
 } from "@/lib/exam-utils";
-
-type Attempt = Doc<"examAttempts">;
-type Exam = Doc<"exams"> & { subjectName: string | null };
-
-const EXAM_ID_PATTERN = /^[A-Za-z0-9_]{16,}$/;
 
 // ---------------------------------------------------------------------------
 // Intro (not started yet)
@@ -202,9 +195,6 @@ function ExamInProgress({
   attempt: Attempt;
 }) {
   const navigate = useNavigate();
-  const recordViolationMutation = useMutation(api.exams.recordViolation);
-  const expireAttempt = useMutation(api.exams.expireAttempt);
-  const completeAttempt = useMutation(api.exams.completeAttempt);
 
   const embedUrl = toGoogleFormEmbedUrl(exam.googleFormUrl);
   const canEmbed = embedUrl.includes("docs.google.com/forms/d/");
@@ -224,18 +214,22 @@ function ExamInProgress({
   const isLow = remaining < 5 * 60 * 1000;
 
   const recordViolation = useCallback(
-    (type: string) => {
+    async (type: string) => {
       if (!inProgress) return;
       const t = Date.now();
       if (t - lastViolationRef.current < 5000) return;
       lastViolationRef.current = t;
-      void recordViolationMutation({ attemptId: attempt._id, type });
+      try {
+        await api.post(`/api/attempts/${attempt._id}/violation`, { type });
+      } catch (err) {
+        console.error("Failed to record violation:", err);
+      }
       setWarnVisible(true);
       toast.warning("Pelanggaran tercatat", {
         description: "Kamu pindah tab. Jangan tinggalkan halaman ujian.",
       });
     },
-    [inProgress, attempt._id, recordViolationMutation],
+    [inProgress, attempt._id],
   );
 
   // Countdown tick
@@ -250,13 +244,10 @@ function ExamInProgress({
     if (!inProgress || remaining > 0 || expiredRef.current) return;
     expiredRef.current = true;
     setExpiredLocally(true);
-    void expireAttempt({ attemptId: attempt._id });
-  }, [inProgress, remaining, attempt._id, expireAttempt]);
+    api.post(`/api/attempts/${attempt._id}/expire`).catch(console.error);
+  }, [inProgress, remaining, attempt._id]);
 
-  // Anti-cheat listeners: tab switches / leaving the page are recorded as
-  // violations. Note: window blur is intentionally NOT used — clicking inside
-  // the Google Form iframe blurs the parent window and would create false
-  // positives; visibilitychange only fires on real tab switches.
+  // Anti-cheat listeners
   useEffect(() => {
     if (!inProgress) return;
     const onVisibilityChange = () => {
@@ -284,8 +275,7 @@ function ExamInProgress({
     return () => clearTimeout(timeout);
   }, [warnVisible]);
 
-  // Manual navigation guard: useBlocker needs a data router, which the app's
-  // <BrowserRouter> is not, so block back/forward with a history sentinel.
+  // Manual navigation guard
   useEffect(() => {
     if (!inProgress) return;
     window.history.pushState({ ujianKita: true }, "");
@@ -301,8 +291,9 @@ function ExamInProgress({
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
-      await completeAttempt({ attemptId: attempt._id });
+      await api.post(`/api/attempts/${attempt._id}/complete`);
       setConfirmSubmit(false);
+      window.location.reload();
     } catch (err) {
       console.error("Submit error:", err);
       toast.error("Gagal mengumpulkan ujian. Coba lagi.");
@@ -315,7 +306,7 @@ function ExamInProgress({
     if (!inProgress) return;
     setIsSubmitting(true);
     try {
-      await completeAttempt({ attemptId: attempt._id });
+      await api.post(`/api/attempts/${attempt._id}/complete`);
       setLeaveDialogOpen(false);
       navigate("/dashboard");
     } catch (err) {
@@ -458,7 +449,7 @@ function ExamInProgress({
         </DialogContent>
       </Dialog>
 
-      {/* Leave-attempt dialog (triggered by back/forward while in progress) */}
+      {/* Leave-attempt dialog */}
       <Dialog open={leaveDialogOpen} onOpenChange={setLeaveDialogOpen}>
         <DialogContent className="rounded-2xl sm:max-w-md">
           <DialogHeader>
@@ -600,18 +591,35 @@ function ExamResult({
 export default function ExamPage() {
   const params = useParams();
   const navigate = useNavigate();
-  const rawExamId = params.examId ?? "";
-  const examId: Id<"exams"> | null = EXAM_ID_PATTERN.test(rawExamId)
-    ? (rawExamId as Id<"exams">)
-    : null;
+  const examId = params.examId ?? "";
 
-  const exam = useQuery(api.exams.getExam, examId ? { examId } : "skip");
-  const attempt = useQuery(api.exams.myAttempt, examId ? { examId } : "skip");
-  const startAttempt = useMutation(api.exams.startAttempt);
+  const [exam, setExam] = useState<Exam | null>(null);
+  const [attempt, setAttempt] = useState<Attempt | null>(null);
+  const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
-  if (examId === null) {
+  useEffect(() => {
+    loadExamData();
+  }, [examId]);
+
+  async function loadExamData() {
+    try {
+      const [examRes, attemptRes] = await Promise.all([
+        api.get<Exam>(`/api/exams/${examId}`),
+        api.get<Attempt | null>(`/api/attempts/my/${examId}`),
+      ]);
+      setExam(examRes);
+      setAttempt(attemptRes);
+    } catch (err) {
+      console.error("Failed to load exam:", err);
+      setExam(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!examId) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background px-4 text-center">
         <FileQuestion className="size-10 text-muted-foreground" />
@@ -628,7 +636,7 @@ export default function ExamPage() {
     );
   }
 
-  if (exam === undefined || attempt === undefined) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -658,7 +666,10 @@ export default function ExamPage() {
       setStarting(true);
       setStartError(null);
       try {
-        await startAttempt({ examId: exam._id });
+        await api.post("/api/attempts/start", { examId: exam._id });
+        // Reload attempt data
+        const newAttempt = await api.get<Attempt>(`/api/attempts/my/${examId}`);
+        setAttempt(newAttempt);
       } catch (err) {
         console.error("Start attempt error:", err);
         setStartError(err instanceof Error ? err.message : "Gagal memulai ujian.");

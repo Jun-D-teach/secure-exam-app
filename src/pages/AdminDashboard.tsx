@@ -14,11 +14,9 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
-import { useAction, useMutation, useQuery } from "convex/react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
+import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -58,22 +56,59 @@ import { ImportUsersDialog } from "@/components/ImportUsersDialog";
 import { useAuth } from "@/hooks/use-auth";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
-type Exam = Doc<"exams"> & { subjectName: string | null; teacherName: string | null };
-type User = Doc<"users">;
-type Subject = Doc<"subjects">;
+type ExamData = {
+  id: string;
+  title: string;
+  subject_id: string;
+  description: string;
+  google_form_url: string;
+  durationMinutes: number;
+  isActive: boolean;
+  startsAt?: number;
+  endsAt?: number;
+  created_by: string;
+  created_at: string;
+  subjectName: string | null;
+  teacherName: string | null;
+};
+
+type UserData = {
+  id: string;
+  name: string;
+  username: string;
+  role: string;
+  created_at: string;
+};
+
+type SubjectData = {
+  id: string;
+  name: string;
+  description: string;
+};
 
 // ---------------------------------------------------------------------------
 // Accounts section
 // ---------------------------------------------------------------------------
 
 function AccountsSection() {
-  const users = useQuery(api.users.listUsers);
-  const createUser = useAction(api.users.createUser);
-  const deleteUser = useMutation(api.users.deleteUser);
+  const [users, setUsers] = useState<UserData[] | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  const loadUsers = useCallback(async () => {
+    try {
+      const data = await api.listUsers();
+      setUsers(data);
+    } catch (err) {
+      console.error("Load users error:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -81,7 +116,7 @@ function AccountsSection() {
     setError(null);
     const formData = new FormData(event.currentTarget);
     try {
-      await createUser({
+      await api.createUser({
         name: String(formData.get("name") || ""),
         username: String(formData.get("username") || ""),
         password: String(formData.get("password") || ""),
@@ -89,6 +124,7 @@ function AccountsSection() {
       });
       toast.success("Akun berhasil dibuat");
       event.currentTarget.reset();
+      loadUsers();
     } catch (err) {
       console.error("Create user error:", err);
       setError(err instanceof Error ? err.message : "Gagal membuat akun.");
@@ -97,17 +133,18 @@ function AccountsSection() {
     }
   };
 
-  const handleDelete = async (user: User) => {
+  const handleDelete = async (user: UserData) => {
     if (!confirm(`Hapus akun ${user.name || user.username}?`)) return;
     try {
-      await deleteUser({ userId: user._id });
+      await api.deleteUser(user.id);
       toast.success("Akun dihapus");
+      loadUsers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menghapus akun.");
     }
   };
 
-  const roleLabel = (role: User["role"]) =>
+  const roleLabel = (role: string) =>
     role === "admin" ? "Admin" : role === "teacher" ? "Guru" : role === "student" ? "Siswa" : "—";
 
   return (
@@ -213,7 +250,7 @@ function AccountsSection() {
               </thead>
               <tbody>
                 {users.map((user) => (
-                  <tr key={user._id} className="border-b last:border-b-0">
+                  <tr key={user.id} className="border-b last:border-b-0">
                     <td className="px-4 py-3 font-medium">{user.name || "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground">@{user.username}</td>
                     <td className="px-4 py-3">
@@ -258,11 +295,22 @@ function AccountsSection() {
 // ---------------------------------------------------------------------------
 
 function SubjectsSection() {
-  const subjects = useQuery(api.subjects.listSubjects);
-  const createSubject = useMutation(api.subjects.createSubject);
-  const deleteSubject = useMutation(api.subjects.deleteSubject);
+  const [subjects, setSubjects] = useState<SubjectData[] | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const loadSubjects = useCallback(async () => {
+    try {
+      const data = await api.listSubjects();
+      setSubjects(data);
+    } catch (err) {
+      console.error("Load subjects error:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSubjects();
+  }, [loadSubjects]);
 
   const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -270,12 +318,13 @@ function SubjectsSection() {
     setError(null);
     const formData = new FormData(event.currentTarget);
     try {
-      await createSubject({
+      await api.createSubject({
         name: String(formData.get("name") || ""),
         description: String(formData.get("description") || "") || undefined,
       });
       toast.success("Mapel ditambahkan");
       event.currentTarget.reset();
+      loadSubjects();
     } catch (err) {
       console.error("Create subject error:", err);
       setError(err instanceof Error ? err.message : "Gagal menambahkan mapel.");
@@ -284,11 +333,12 @@ function SubjectsSection() {
     }
   };
 
-  const handleDelete = async (subject: Subject) => {
+  const handleDelete = async (subject: SubjectData) => {
     if (!confirm(`Hapus mapel ${subject.name}?`)) return;
     try {
-      await deleteSubject({ subjectId: subject._id });
+      await api.deleteSubject(subject.id);
       toast.success("Mapel dihapus");
+      loadSubjects();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Gagal menghapus mapel.");
     }
@@ -301,7 +351,7 @@ function SubjectsSection() {
           <BookOpen className="size-4 text-primary" /> Mapel
         </CardTitle>
         <CardDescription>
-          Mapel menentukan “jalur” yang tampil di halaman siswa. Guru hanya bisa
+          Mapel menentukan "jalur" yang tampil di halaman siswa. Guru hanya bisa
           memilih mapel dari daftar ini.
         </CardDescription>
       </CardHeader>
@@ -354,7 +404,7 @@ function SubjectsSection() {
           <div className="flex flex-wrap gap-2">
             {subjects.map((subject) => (
               <div
-                key={subject._id}
+                key={subject.id}
                 className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/40 py-1.5 pl-3 pr-1.5"
               >
                 <span className="text-sm font-medium">{subject.name}</span>
@@ -384,12 +434,13 @@ function ScheduleDialog({
   exam,
   open,
   onOpenChange,
+  onSaved,
 }: {
-  exam: Exam;
+  exam: ExamData;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
 }) {
-  const setExamSchedule = useMutation(api.exams.setExamSchedule);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -402,14 +453,14 @@ function ScheduleDialog({
     const endsAtRaw = String(formData.get("endsAt") || "");
     const publish = String(formData.get("publish")) === "on";
     try {
-      await setExamSchedule({
-        examId: exam._id,
+      await api.setExamSchedule(exam.id, {
         isActive: publish,
         startsAt: startsAtRaw ? new Date(startsAtRaw).getTime() : undefined,
         endsAt: endsAtRaw ? new Date(endsAtRaw).getTime() : undefined,
       });
       toast.success(publish ? "Ujian dipublikasikan" : "Ujian diarsipkan (draf)");
       onOpenChange(false);
+      onSaved();
     } catch (err) {
       console.error("Schedule exam error:", err);
       setError(err instanceof Error ? err.message : "Gagal menyimpan jadwal.");
@@ -465,7 +516,7 @@ function ScheduleDialog({
             Publikasikan ke siswa (muncul di halaman siswa)
           </label>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Kosongkan “Buka pada” untuk langsung terbuka. “Tutup pada” adalah
+            Kosongkan "Buka pada" untuk langsung terbuka. "Tutup pada" adalah
             batas terakhir siswa boleh mulai — ujian yang berjalan tetap lanjut
             sampai waktunya habis.
           </p>
@@ -497,7 +548,7 @@ function ScheduleDialog({
   );
 }
 
-function ExamStatusBadge({ exam }: { exam: Exam }) {
+function ExamStatusBadge({ exam }: { exam: ExamData }) {
   if (!exam.isActive) {
     return (
       <Badge variant="secondary" className="rounded-full">
@@ -528,8 +579,21 @@ function ExamStatusBadge({ exam }: { exam: Exam }) {
 }
 
 function ScheduleSection() {
-  const exams = useQuery(api.exams.listExams);
-  const [editing, setEditing] = useState<Exam | null>(null);
+  const [exams, setExams] = useState<ExamData[] | undefined>(undefined);
+  const [editing, setEditing] = useState<ExamData | null>(null);
+
+  const loadExams = useCallback(async () => {
+    try {
+      const data = await api.listExams();
+      setExams(data);
+    } catch (err) {
+      console.error("Load exams error:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadExams();
+  }, [loadExams]);
 
   return (
     <Card className="rounded-2xl border-border/70 shadow-sm">
@@ -574,7 +638,7 @@ function ScheduleSection() {
               </thead>
               <tbody>
                 {exams.map((exam) => (
-                  <tr key={exam._id} className="border-b last:border-b-0">
+                  <tr key={exam.id} className="border-b last:border-b-0">
                     <td className="px-4 py-3">
                       <p className="font-medium">{exam.title}</p>
                       <p className="text-xs text-muted-foreground">
@@ -614,6 +678,7 @@ function ScheduleSection() {
           onOpenChange={(open) => {
             if (!open) setEditing(null);
           }}
+          onSaved={loadExams}
         />
       )}
     </Card>

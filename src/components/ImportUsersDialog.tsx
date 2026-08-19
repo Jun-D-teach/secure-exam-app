@@ -1,8 +1,7 @@
 import { CheckCircle2, ClipboardCopy, Loader2, Upload } from "lucide-react";
 import { useState } from "react";
-import { useAction } from "convex/react";
 import { toast } from "sonner";
-import { api } from "@/convex/_generated/api";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -57,7 +56,6 @@ export function ImportUsersDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const importUsers = useAction(api.users.importUsers);
   const [role, setRole] = useState<"student" | "teacher">("student");
   const [text, setText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -91,7 +89,7 @@ export function ImportUsersDialog({
     setIsSubmitting(true);
     setError(null);
     try {
-      const created = await importUsers({ role, items });
+      const created = await api.importUsers({ role, items });
       setResult(created);
       toast.success(`${created.length} akun berhasil diimpor`, {
         description: "Username & password awal tampil di tabel berikut.",

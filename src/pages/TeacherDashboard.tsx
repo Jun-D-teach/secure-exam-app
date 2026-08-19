@@ -13,11 +13,9 @@ import {
   Timer,
   Users,
 } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { api } from "@/convex/_generated/api";
-import type { Doc } from "@/convex/_generated/dataModel";
+import { api } from "@/lib/api";
 import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,7 +53,27 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
-type Exam = Doc<"exams"> & { subjectName: string | null };
+type ExamData = {
+  id: string;
+  title: string;
+  subject_id: string;
+  description: string;
+  google_form_url: string;
+  durationMinutes: number;
+  isActive: boolean;
+  startsAt?: number;
+  endsAt?: number;
+  created_by: string;
+  created_at: string;
+  subjectName: string | null;
+  teacherName: string | null;
+};
+
+type SubjectData = {
+  id: string;
+  name: string;
+  description: string;
+};
 
 // ---------------------------------------------------------------------------
 // Create exam dialog (draft — admin schedules & publishes)
@@ -64,14 +82,21 @@ type Exam = Doc<"exams"> & { subjectName: string | null };
 function CreateExamDialog({
   open,
   onOpenChange,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCreated: () => void;
 }) {
-  const createExam = useMutation(api.exams.createExam);
-  const subjects = useQuery(api.subjects.listSubjects);
+  const [subjects, setSubjects] = useState<SubjectData[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      api.listSubjects().then(setSubjects).catch(console.error);
+    }
+  }, [open]);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -80,9 +105,9 @@ function CreateExamDialog({
     const formData = new FormData(event.currentTarget);
     const subjectId = String(formData.get("subjectId") || "");
     try {
-      await createExam({
+      await api.createExam({
         title: String(formData.get("title") || ""),
-        subjectId: subjectId as Doc<"subjects">["_id"],
+        subjectId,
         durationMinutes: Number(formData.get("durationMinutes") || 60),
         description: String(formData.get("description") || "") || undefined,
         googleFormUrl: String(formData.get("googleFormUrl") || ""),
@@ -91,6 +116,7 @@ function CreateExamDialog({
         description: "Admin akan mengatur jadwal & mempublikasikan ujian ini.",
       });
       onOpenChange(false);
+      onCreated();
     } catch (err) {
       console.error("Create exam error:", err);
       setError(err instanceof Error ? err.message : "Gagal membuat ujian.");
@@ -126,20 +152,20 @@ function CreateExamDialog({
               <Select
                 name="subjectId"
                 required
-                disabled={isSubmitting || subjects === undefined}
+                disabled={isSubmitting}
               >
                 <SelectTrigger className="rounded-lg">
-                  <SelectValue placeholder={subjects?.length ? "Pilih mapel" : "Belum ada mapel"} />
+                  <SelectValue placeholder={subjects.length ? "Pilih mapel" : "Belum ada mapel"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(subjects ?? []).map((subject) => (
-                    <SelectItem key={subject._id} value={subject._id}>
+                  {subjects.map((subject) => (
+                    <SelectItem key={subject.id} value={subject.id}>
                       {subject.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {subjects?.length === 0 && (
+              {subjects.length === 0 && (
                 <p className="text-xs text-muted-foreground">
                   Belum ada mapel. Minta admin menambahkan mapel terlebih dahulu.
                 </p>
@@ -179,7 +205,7 @@ function CreateExamDialog({
               disabled={isSubmitting}
             />
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Gunakan link dari tombol <span className="font-medium">“Kirim”</span>{" "}
+              Gunakan link dari tombol <span className="font-medium">"Kirim"</span>{" "}
               di Google Form. Link pendek (forms.gle) belum bisa ditampilkan di
               dalam aplikasi.
             </p>
@@ -196,7 +222,7 @@ function CreateExamDialog({
             </Button>
             <Button
               type="submit"
-              disabled={isSubmitting || !subjects?.length}
+              disabled={isSubmitting || !subjects.length}
               className="rounded-lg"
             >
               {isSubmitting ? (
@@ -225,14 +251,17 @@ function ParticipantsDialog({
   open,
   onOpenChange,
 }: {
-  exam: Exam;
+  exam: ExamData;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const attempts = useQuery(
-    api.exams.attemptsForExam,
-    open ? { examId: exam._id } : "skip",
-  );
+  const [attempts, setAttempts] = useState<any[] | undefined>(undefined);
+
+  useEffect(() => {
+    if (open) {
+      api.attemptsForExam(exam.id).then(setAttempts).catch(console.error);
+    }
+  }, [open, exam.id]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -272,7 +301,7 @@ function ParticipantsDialog({
               </thead>
               <tbody>
                 {attempts.map((attempt) => (
-                  <tr key={attempt._id} className="border-b last:border-b-0">
+                  <tr key={attempt.id} className="border-b last:border-b-0">
                     <td className="px-4 py-3">
                       <p className="font-medium">{attempt.student?.name || "Tanpa nama"}</p>
                       <p className="text-xs text-muted-foreground">
@@ -327,7 +356,7 @@ function ParticipantsDialog({
 // Exam card
 // ---------------------------------------------------------------------------
 
-function ExamStatusBadge({ exam }: { exam: Exam }) {
+function ExamStatusBadge({ exam }: { exam: ExamData }) {
   if (!exam.isActive) {
     return (
       <Badge variant="secondary" className="rounded-full">
@@ -357,9 +386,18 @@ function ExamStatusBadge({ exam }: { exam: Exam }) {
   );
 }
 
-function ExamCard({ exam, index }: { exam: Exam; index: number }) {
-  const summary = useQuery(api.exams.attemptsSummary, { examId: exam._id });
+function ExamCard({ exam, index }: { exam: ExamData; index: number }) {
+  const [summary, setSummary] = useState<{
+    started: number;
+    inProgress: number;
+    completed: number;
+    totalViolations: number;
+  } | null>(null);
   const [showParticipants, setShowParticipants] = useState(false);
+
+  useEffect(() => {
+    api.attemptsSummary(exam.id).then(setSummary).catch(console.error);
+  }, [exam.id]);
 
   return (
     <motion.div
@@ -388,7 +426,7 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
         <CardContent className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
-              Dibuat {formatDateTime(exam.createdAt)}
+              Dibuat {formatDateTime(parseInt(exam.created_at) || Date.now())}
             </p>
           </div>
 
@@ -447,7 +485,7 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
             </Button>
             <Button variant="ghost" size="icon" className="rounded-lg" asChild>
               <a
-                href={exam.googleFormUrl}
+                href={exam.google_form_url}
                 target="_blank"
                 rel="noreferrer"
                 title="Buka Google Form"
@@ -473,9 +511,22 @@ function ExamCard({ exam, index }: { exam: Exam; index: number }) {
 
 export default function TeacherDashboard() {
   const { user, signOut } = useAuth();
-  const exams = useQuery(api.exams.listExams);
+  const [exams, setExams] = useState<ExamData[] | undefined>(undefined);
   const [showCreate, setShowCreate] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  const loadExams = useCallback(async () => {
+    try {
+      const data = await api.listExams();
+      setExams(data);
+    } catch (err) {
+      console.error("Load exams error:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadExams();
+  }, [loadExams]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -567,14 +618,14 @@ export default function TeacherDashboard() {
             </div>
             <div className="grid gap-5 sm:grid-cols-2">
               {exams.map((exam, i) => (
-                <ExamCard key={exam._id} exam={exam} index={i} />
+                <ExamCard key={exam.id} exam={exam} index={i} />
               ))}
             </div>
           </>
         )}
       </div>
 
-      <CreateExamDialog open={showCreate} onOpenChange={setShowCreate} />
+      <CreateExamDialog open={showCreate} onOpenChange={setShowCreate} onCreated={loadExams} />
       <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
     </main>
   );

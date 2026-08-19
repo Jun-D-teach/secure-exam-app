@@ -12,11 +12,9 @@ import {
   Timer,
   TriangleAlert,
 } from "lucide-react";
-import { useQuery } from "convex/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
-import { api } from "@/convex/_generated/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,11 +26,8 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { useAuth } from "@/hooks/use-auth";
+import { api, type Exam, type Attempt } from "@/lib/api";
 import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
-import type { Doc } from "@/convex/_generated/dataModel";
-
-type Exam = Doc<"exams"> & { subjectName: string | null };
-type Attempt = Doc<"examAttempts">;
 
 function attemptFor(exam: Exam, attempts: Attempt[] | undefined) {
   return attempts?.find((a) => a.examId === exam._id);
@@ -82,7 +77,6 @@ function StatusBadge({ attempt, exam }: { attempt: Attempt | undefined; exam: Ex
   );
 }
 
-// One exam entry inside a subject card
 function ExamEntry({ exam, attempt }: { exam: Exam; attempt: Attempt | undefined }) {
   const availability = examAvailability(exam);
   return (
@@ -147,20 +141,40 @@ function ExamEntry({ exam, attempt }: { exam: Exam; attempt: Attempt | undefined
 
 export default function StudentDashboard() {
   const { user, signOut } = useAuth();
-  const exams = useQuery(api.exams.listExams);
-  const attempts = useQuery(api.exams.myAttempts);
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [loading, setLoading] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
 
   const firstName = user?.name?.split(" ")[0] || "Siswa";
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    try {
+      const [examsRes, attemptsRes] = await Promise.all([
+        api.get<Exam[]>("/api/exams"),
+        api.get<Attempt[]>("/api/attempts/my"),
+      ]);
+      setExams(examsRes);
+      setAttempts(attemptsRes);
+    } catch (err) {
+      console.error("Failed to load student data:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   const handleSignOut = async () => {
     await signOut();
     window.location.href = "/";
   };
 
-  // Group published exams by subject ("satu jalur" per mapel, set by admin).
+  // Group published exams by subject
   const groups: { subjectName: string; exams: Exam[] }[] = [];
-  for (const exam of exams ?? []) {
+  for (const exam of exams) {
     const name = exam.subjectName || "Tanpa mapel";
     const group = groups.find((g) => g.subjectName === name);
     if (group) {
@@ -203,7 +217,7 @@ export default function StudentDashboard() {
       </header>
 
       <div className="mx-auto w-full max-w-5xl px-5 py-10">
-        {exams === undefined || attempts === undefined ? (
+        {loading ? (
           <div className="flex justify-center py-24">
             <Timer className="size-6 animate-spin text-muted-foreground" />
           </div>

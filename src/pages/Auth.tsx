@@ -2,9 +2,8 @@ import { motion } from "framer-motion";
 import { KeyRound, Loader2, Lock, ShieldCheck, UserRound } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { useAction, useQuery } from "convex/react";
 import { toast } from "sonner";
-import { api } from "@/convex/_generated/api";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -45,10 +44,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [error, setError] = useState<string | null>(null);
 
   // First-run setup: no admin account exists yet → offer bootstrap.
-  const hasAdmin = useQuery(api.users.hasAdmin);
-  const bootstrapAdmin = useAction(api.users.bootstrapAdmin);
+  const [hasAdmin, setHasAdmin] = useState<boolean | null>(null);
   const [showSetup, setShowSetup] = useState(false);
   const [setupLoading, setSetupLoading] = useState(false);
+
+  useEffect(() => {
+    api.hasAdmin().then(({ hasAdmin }) => setHasAdmin(hasAdmin));
+  }, []);
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
@@ -61,7 +63,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     setIsLoading(true);
     setError(null);
     try {
-      await signIn("password", new FormData(event.currentTarget));
+      const formData = new FormData(event.currentTarget);
+      await signIn(
+        String(formData.get("username") || ""),
+        String(formData.get("password") || ""),
+      );
       // Navigation happens via the auth-state effect above once confirmed.
     } catch (err) {
       console.error("Login error:", err);
@@ -80,11 +86,11 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
     setError(null);
     const formData = new FormData(event.currentTarget);
     try {
-      await bootstrapAdmin({
-        name: String(formData.get("setup-name") || ""),
-        username: String(formData.get("setup-username") || ""),
-        password: String(formData.get("setup-password") || ""),
-      });
+      await api.bootstrapAdmin(
+        String(formData.get("setup-name") || ""),
+        String(formData.get("setup-username") || ""),
+        String(formData.get("setup-password") || ""),
+      );
       setShowSetup(false);
       toast.success("Akun admin pertama dibuat", {
         description: "Silakan login dengan akun tersebut.",
@@ -167,14 +173,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   />
                 </div>
               </div>
-              <input type="hidden" name="flow" value="signIn" />
               {error && <p className="text-sm text-destructive">{error}</p>}
             </CardContent>
             <CardFooter className="flex-col gap-3 pb-7">
               <Button
                 type="submit"
                 className="h-11 w-full rounded-lg"
-                disabled={isLoading || hasAdmin === undefined}
+                disabled={isLoading || hasAdmin === null}
               >
                 {isLoading ? (
                   <>

@@ -1,20 +1,58 @@
-import { api } from "@/convex/_generated/api";
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useState, useEffect, useCallback } from "react";
+import { api } from "@/lib/api";
+
+interface User {
+  id: string;
+  name: string;
+  username: string;
+  role: string;
+}
 
 export function useAuth() {
-  const { isLoading: isAuthLoading, isAuthenticated } = useConvexAuth();
-  const user = useQuery(api.users.currentUser);
-  const { signIn, signOut } = useAuthActions();
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Derive isLoading directly from the dependencies instead of managing separate state
-  const isLoading = isAuthLoading || user === undefined;
+  const checkAuth = useCallback(async () => {
+    const token = api.getToken();
+    if (!token) {
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const userData = await api.getCurrentUser();
+      setUser(userData);
+    } catch {
+      api.logout();
+      setUser(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  const signIn = async (username: string, password: string) => {
+    const data = await api.login(username, password);
+    setUser(data.user);
+    return data;
+  };
+
+  const signOut = async () => {
+    api.logout();
+    setUser(null);
+  };
+
+  const isAuthenticated = !!user;
 
   return {
+    user,
     isLoading,
     isAuthenticated,
-    user,
     signIn,
     signOut,
+    refreshUser: checkAuth,
   };
 }
