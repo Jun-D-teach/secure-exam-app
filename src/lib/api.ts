@@ -101,7 +101,22 @@ class ApiClient {
     }
 
     const response = await fetch(`${API_BASE}${endpoint}`, config);
-    const data = await response.json();
+    const contentType = response.headers.get("content-type") || "";
+    const text = await response.text();
+
+    // Detect HTML response (backend not running → web server returns 404 page)
+    if (contentType.includes("text/html") || text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html")) {
+      throw new Error(
+        "Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif."
+      );
+    }
+
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("Response server tidak valid. Silakan coba lagi.");
+    }
 
     if (!response.ok) {
       throw new Error(data.error || "Terjadi kesalahan");
