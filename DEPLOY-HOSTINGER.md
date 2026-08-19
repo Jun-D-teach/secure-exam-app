@@ -270,6 +270,12 @@ certbot --nginx -d domainanda.com -d www.domainanda.com
 
 ## Troubleshooting
 
+### Build error: "tsc not found" atau "vite not found"
+Hostinger sering menjalankan `npm install --production` yang melewati `devDependencies`. Script `build` di `package.json` sudah diupdate untuk menjalankan `npm install` (full install) dulu sebelum build. Jika masih error, atur custom build command di Hostinger panel ke:
+```
+npm install && npx tsc -b && npx vite build
+```
+
 ### Server tidak mau jalan
 ```bash
 pm2 logs ujiankita-api
