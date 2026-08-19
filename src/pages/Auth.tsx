@@ -51,7 +51,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [resetLoading, setResetLoading] = useState(false);
 
   useEffect(() => {
-    api.hasAdmin().then(({ hasAdmin }) => setHasAdmin(hasAdmin));
+    api
+      .hasAdmin()
+      .then(({ hasAdmin }) => setHasAdmin(hasAdmin))
+      .catch(() => {
+        // Backend unreachable — assume admin exists so login button enables
+        setHasAdmin(true);
+      });
   }, []);
 
   useEffect(() => {
@@ -203,7 +209,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
               <Button
                 type="submit"
                 className="h-11 w-full rounded-lg"
-                disabled={isLoading || hasAdmin === null}
+                disabled={isLoading}
               >
                 {isLoading ? (
                   <>
@@ -217,8 +223,17 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   </>
                 )}
               </Button>
+              {hasAdmin === true && !showReset && !showSetup && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground transition-colors"
+                  onClick={() => setShowReset(true)}
+                >
+                  ↻ Lupa Password Admin?
+                </button>
+              )}
               <p className="text-xs leading-relaxed text-muted-foreground">
-                Tidak punya akun? Hubungi admin sekolah — semua akun (guru &
+                Tidak punya akun? Hubungi admin sekolah — semua akun (guru &amp;
                 siswa) dibuat oleh admin.
               </p>
             </CardFooter>
@@ -336,7 +351,7 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
                   Buat akun admin pertama
                 </CardTitle>
                 <CardDescription>
-                  Akun ini berperan sebagai pengelola sistem. Simpan username &
+                  Akun ini berperan sebagai pengelola sistem. Simpan username &amp;
                   password-nya baik-baik.
                 </CardDescription>
               </CardHeader>
