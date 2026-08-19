@@ -106,6 +106,71 @@ router.post("/bootstrap-admin", async (req, res) => {
   }
 });
 
+// Reset admin password (requires ADMIN_RESET_KEY env var)
+router.post("/reset-admin", async (req, res) => {
+  try {
+    const resetKey = process.env.ADMIN_RESET_KEY;
+    
+    if (!resetKey) {
+      return res.status(403).json({ error: "Fitur reset admin tidak aktif. Atur ADMIN_RESET_KEY di environment." });
+    }
+    
+    const { resetToken, newUsername, newPassword } = req.body;
+    
+    if (!resetToken || resetToken !== resetKey) {
+      return res.status(401).json({ error: "Reset token salah" });
+    }
+    
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: "Password baru minimal 8 karakter" });
+    }
+    
+    // Find existing admin
+    const users = await readSheet(SHEETS.USERS);
+    const admin = users.find(u => u.role === "admin");
+    
+    if (!admin) {
+      // No admin exists — create one
+      const username = newUsername || "admin";
+      if (!/^[a-z0-9_.-]{3,32}$/.test(username)) {
+        return res.status(400).json({ error: "Username harus 3-32 karakter (huruf kecil, angka, . _ -)" });
+      }
+      const passwordHash = await hashPassword(newPassword);
+      await addRow(SHEETS.USERS, {
+        id: Date.now().toString(36) + Math.random().toString(36).substr(2, 9),
+        name: "Admin",
+        username,
+        password_hash: passwordHash,
+        role: "admin",
+        created_at: new Date().toISOString(),
+      });
+      return res.json({ message: "Akun admin berhasil dibuat", username });
+    }
+    
+    // Admin exists — update password and optionally username
+    const passwordHash = await hashPassword(newPassword);
+    const updates: Partial<UserRow> = { password_hash: passwordHash };
+    
+    if (newUsername && newUsername !== admin.username) {
+      if (!/^[a-z0-9_.-]{3,32}$/.test(newUsername)) {
+        return res.status(400).json({ error: "Username harus 3-32 karakter (huruf kecil, angka, . _ -)" });
+      }
+      const existing = await findByField<UserRow>(SHEETS.USERS, "username", newUsername);
+      if (existing) {
+        return res.status(400).json({ error: "Username sudah dipakai" });
+      }
+      updates.username = newUsername;
+    }
+    
+    await updateRow(SHEETS.USERS, admin.id, updates);
+    
+    res.json({ message: "Admin berhasil direset", username: updates.username || admin.username });
+  } catch (error) {
+    console.error("Reset admin error:", error);
+    res.status(500).json({ error: "Gagal mereset admin" });
+  }
+});
+
 // Check if admin exists
 router.get("/has-admin", async (req, res) => {
   try {

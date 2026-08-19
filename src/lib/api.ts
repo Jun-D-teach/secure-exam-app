@@ -157,6 +157,13 @@ class ApiClient {
     }>("/api/auth/me", { method: "PUT", body: data });
   }
 
+  async resetAdmin(data: { resetToken: string; newUsername?: string; newPassword: string }) {
+    return this.request<{ message: string; username: string }>("/api/auth/reset-admin", {
+      method: "POST",
+      body: data,
+    });
+  }
+
   logout() {
     this.setToken(null);
   }

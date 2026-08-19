@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { KeyRound, Loader2, Lock, ShieldCheck, UserRound } from "lucide-react";
+import { KeyRound, Loader2, Lock, RotateCcw, ShieldCheck, UserRound } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -47,6 +47,8 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   const [hasAdmin, setHasAdmin] = useState<boolean | null>(null);
   const [showSetup, setShowSetup] = useState(false);
   const [setupLoading, setSetupLoading] = useState(false);
+  const [showReset, setShowReset] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
 
   useEffect(() => {
     api.hasAdmin().then(({ hasAdmin }) => setHasAdmin(hasAdmin));
@@ -100,6 +102,28 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       setError(err instanceof Error ? err.message : "Gagal membuat akun admin.");
     } finally {
       setSetupLoading(false);
+    }
+  };
+
+  const handleResetAdmin = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setResetLoading(true);
+    setError(null);
+    const formData = new FormData(event.currentTarget);
+    try {
+      const result = await api.resetAdmin({
+        resetToken: String(formData.get("reset-key") || ""),
+        newPassword: String(formData.get("reset-password") || ""),
+      });
+      setShowReset(false);
+      toast.success("Admin berhasil direset", {
+        description: `Username baru: ${result.username}. Silakan login dengan password baru.`,
+      });
+    } catch (err) {
+      console.error("Reset admin error:", err);
+      setError(err instanceof Error ? err.message : "Gagal mereset admin.");
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -200,6 +224,83 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             </CardFooter>
           </form>
         </Card>
+
+        {showReset && (
+          <motion.div
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <Card className="mt-4 rounded-2xl border-orange-500/25 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base tracking-tight">
+                  <RotateCcw className="size-4 text-orange-500" /> Reset Password Admin
+                </CardTitle>
+                <CardDescription>
+                  Masukkan ADMIN_RESET_KEY yang ada di environment variable server,
+                  lalu tentukan password baru.
+                </CardDescription>
+              </CardHeader>
+              <form onSubmit={handleResetAdmin}>
+                <CardContent className="grid gap-3 pb-2">
+                  <div className="grid gap-2">
+                    <Label htmlFor="reset-key" className="text-xs">
+                      Admin Reset Key *
+                    </Label>
+                    <Input
+                      id="reset-key"
+                      name="reset-key"
+                      type="password"
+                      placeholder="Masukkan ADMIN_RESET_KEY"
+                      disabled={resetLoading}
+                      required
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="reset-password" className="text-xs">
+                      Password Baru (min. 8 karakter) *
+                    </Label>
+                    <Input
+                      id="reset-password"
+                      name="reset-password"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={8}
+                      placeholder="••••••••"
+                      disabled={resetLoading}
+                      required
+                    />
+                  </div>
+                  {error && <p className="text-sm text-destructive">{error}</p>}
+                </CardContent>
+                <CardFooter className="gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      setShowReset(false);
+                      setError(null);
+                    }}
+                    disabled={resetLoading}
+                  >
+                    Batal
+                  </Button>
+                  <Button type="submit" disabled={resetLoading} className="rounded-lg">
+                    {resetLoading ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" /> Mereset...
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw className="size-4" /> Reset Password
+                      </>
+                    )}
+                  </Button>
+                </CardFooter>
+              </form>
+            </Card>
+          </motion.div>
+        )}
 
         {hasAdmin === false && !showSetup && (
           <div className="relative mt-4 rounded-2xl border border-primary/25 bg-primary/5 p-4">
