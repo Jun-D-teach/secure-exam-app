@@ -3,13 +3,12 @@
  * Compatible with Hostinger Express preset (runs with `node server.js`)
  */
 
-// IMMEDIATE startup log - proves this file is being executed
+// IMMEDIATE startup log
 console.log("[UjianKita] server.js loaded at", new Date().toISOString());
 console.log("[UjianKita] Node.js", process.version, "| PID", process.pid);
 console.log("[UjianKita] CWD:", process.cwd());
-console.log("[UjianKita] PORT env:", process.env.PORT || "(not set, default 3001)");
 
-// Global error handlers to prevent silent crashes
+// Global error handlers
 process.on("uncaughtException", function (err) {
   console.error("[UjianKita] UNCAUGHT EXCEPTION:", err.message);
   console.error(err.stack);
@@ -23,16 +22,15 @@ var cors = require("cors");
 var path = require("path");
 var fs = require("fs");
 
-console.log("[UjianKita] Dependencies loaded (express, cors, path, fs)");
+console.log("[UjianKita] Dependencies loaded");
 
 var app = express();
 var PORT = process.env.PORT || 3001;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// --- Google Sheets helper ---
+// --- Google Sheets ---
 var googleapis;
 try {
   googleapis = require("googleapis");
@@ -43,15 +41,90 @@ try {
 
 var SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "";
 var SA_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
-var SA_KEY = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
 
+// --- Normalize Google private key using charCodeAt (avoids all regex escaping issues) ---
+function normalizePemKey(raw) {
+  if (!raw) return "";
+  var s = raw;
+  // Remove surrounding quotes
+  if (s.length >= 2) {
+    var fc = s.charCodeAt(0);
+    var lc = s.charCodeAt(s.length - 1);
+    if ((fc === 34 && lc === 34) || (fc === 39 && lc === 39)) {
+      s = s.substring(1, s.length - 1);
+    }
+  }
+  // Multi-pass: convert all escaped newlines to real newlines
+  // Pass 1-5 handles up to 5 levels of escaping
+  for (var pass = 0; pass < 5; pass++) {
+    var changed = false;
+    var out = [];
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if (c === 13) {
+        // CR: skip if followed by LF (handle CRLF)
+        if (i + 1 < s.length && s.charCodeAt(i + 1) === 10) i++;
+        out.push("\n");
+        changed = true;
+      } else if (c === 92 && i + 1 < s.length) {
+        // Backslash: check next char
+        var nc = s.charCodeAt(i + 1);
+        if (nc === 110) {
+          // \n -> newline
+          out.push("\n");
+          i++;
+          changed = true;
+        } else if (nc === 114) {
+          // \r -> CR (will become newline on next pass if CRLF)
+          out.push("\r");
+          i++;
+          changed = true;
+        } else {
+          out.push(s.charAt(i));
+        }
+      } else {
+        out.push(s.charAt(i));
+      }
+    }
+    s = out.join("");
+    if (!changed) break;
+  }
+  // Collapse multiple blank lines
+  var final = [];
+  var blankCount = 0;
+  for (var i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) === 10) {
+      blankCount++;
+      if (blankCount <= 2) final.push("\n");
+    } else {
+      blankCount = 0;
+      final.push(s.charAt(i));
+    }
+  }
+  return final.join("").trim();
+}
+
+var SA_KEY = normalizePemKey(process.env.GOOGLE_PRIVATE_KEY || "");
+
+// Diagnostic logging
 console.log("[UjianKita] ENV check:", {
   hasSpreadsheetId: !!SPREADSHEET_ID,
   hasServiceAccountEmail: !!SA_EMAIL,
   hasPrivateKey: !!SA_KEY,
   keyLength: SA_KEY.length,
+  hasBeginMarker: SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 || SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0,
+  hasEndMarker: SA_KEY.indexOf("-----END PRIVATE KEY-----") > -1,
+  lineCount: SA_KEY.split("\n").length,
   nodeEnv: process.env.NODE_ENV || "(not set)",
 });
+
+// Validate PEM format
+if (SA_KEY && SA_KEY.indexOf("-----BEGIN") !== 0) {
+  console.error("[UjianKita] WARNING: Private key does not start with -----BEGIN. First 50 chars:", SA_KEY.substring(0, 50));
+}
+if (SA_KEY && SA_KEY.indexOf("-----END") === -1) {
+  console.error("[UjianKita] WARNING: Private key does not contain -----END marker");
+}
 
 var _sheets = null;
 
@@ -65,6 +138,7 @@ async function getSheets() {
   return _sheets;
 }
 
+// --- Sheet config ---
 var SHEETS = {
   USERS: "Users",
   SUBJECTS: "Subjects",
@@ -78,6 +152,7 @@ HEADERS[SHEETS.SUBJECTS] = ["id", "name", "description", "created_by", "created_
 HEADERS[SHEETS.EXAMS] = ["id", "title", "subject_id", "description", "google_form_url", "duration_minutes", "is_active", "starts_at", "ends_at", "created_by", "created_at"];
 HEADERS[SHEETS.ATTEMPTS] = ["id", "exam_id", "student_id", "status", "started_at", "ends_at", "completed_at", "violation_count", "violations"];
 
+// --- Sheet helpers ---
 async function readSheet(sheetName) {
   var api = await getSheets();
   var res = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: sheetName + "!A:Z" });
@@ -156,7 +231,6 @@ function generateId() {
 // --- Auth helpers ---
 var bcrypt = require("bcryptjs");
 var jwt = require("jsonwebtoken");
-
 var JWT_SECRET = process.env.JWT_SECRET || "ujiankita-secret-change-in-production";
 
 async function hashPassword(pw) { return bcrypt.hash(pw, 10); }
@@ -188,7 +262,7 @@ function requireRole(roles) {
 //  API ROUTES
 // ============================================================
 
-// --- HEALTH CHECK (first, no auth needed) ---
+// --- HEALTH CHECK ---
 app.get("/api/health", function (_req, res) {
   res.json({ status: "ok", timestamp: Date.now(), port: PORT });
 });
@@ -657,10 +731,8 @@ if (process.env.NODE_ENV === "production" && fs.existsSync(distPath)) {
 console.log("[UjianKita] Starting server on port " + PORT + "...");
 
 app.listen(PORT, "0.0.0.0", function () {
-  console.log("[UjianKita] ✅ Server running on port " + PORT);
+  console.log("[UjianKita] Server running on port " + PORT);
   console.log("[UjianKita] API: http://localhost:" + PORT + "/api");
-  console.log("[UjianKita] Health: http://localhost:" + PORT + "/api/health");
-  console.log("[UjianKita] Debug: http://localhost:" + PORT + "/api/debug/sheets");
 });
 
 console.log("[UjianKita] app.listen() called, waiting for callback...");
