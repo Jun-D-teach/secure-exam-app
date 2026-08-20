@@ -182,7 +182,7 @@ app.post("/api/auth/bootstrap-admin", async (req, res) => {
     if (await findByField(SHEETS.USERS, "username", username)) return res.status(400).json({ error: "Username sudah dipakai" });
     await addRow(SHEETS.USERS, { id: generateId(), name: name.trim() || username, username, password_hash: await hashPassword(password), role: "admin", created_at: new Date().toISOString() });
     res.json({ message: "Akun admin berhasil dibuat" });
-  } catch (e) { console.error("Bootstrap error:", e); res.status(500).json({ error: "Gagal membuat akun admin" }); }
+  } catch (e) { console.error("Bootstrap error:", e); res.status(500).json({ error: "Gagal membuat akun admin: " + (e.message || "Terjadi kesalahan server. Periksa apakah Google Spreadsheet sudah di-share ke service account.") }); }
 });
 
 app.post("/api/auth/reset-admin", async (req, res) => {
@@ -215,7 +215,7 @@ app.get("/api/auth/has-admin", async (_req, res) => {
   try {
     const users = await readSheet(SHEETS.USERS);
     res.json({ hasAdmin: users.some(u => u.role === "admin") });
-  } catch (e) { console.error("has-admin error:", e); res.json({ hasAdmin: false }); }
+  } catch (e) { console.error("has-admin error:", e); res.status(500).json({ hasAdmin: null, error: "Gagal terhubung ke Google Sheets: " + (e.message || "Periksa konfigurasi service account dan share spreadsheet.") }); }
 });
 
 app.get("/api/auth/me", authenticate, async (req, res) => {
@@ -533,6 +533,76 @@ if (process.env.NODE_ENV === "production") {
 
 // --- HEALTH CHECK ---
 app.get("/api/health", (_req, res) => res.json({ status: "ok", timestamp: Date.now() }));
+
+// --- DEBUG: Google Sheets diagnostic ---
+app.get("/api/debug/sheets", async (_req, res) => {
+  const result = { steps: [] };
+  try {
+    // Step 1: Check env vars
+    result.steps.push({ name: "env_check", ok: true, data: {
+      hasSpreadsheetId: !!SPREADSHEET_ID,
+      hasServiceAccountEmail: !!SA_EMAIL,
+      hasPrivateKey: !!SA_KEY,
+      keyLength: SA_KEY.length,
+      keyHasNewlines: SA_KEY.includes("\n"),
+      keyFirstChars: SA_KEY.substring(0, 30),
+    }});
+
+    // Step 2: Auth
+    try {
+      const api = await getSheets();
+      result.steps.push({ name: "sheets_client", ok: true });
+
+      // Step 3: Try to access spreadsheet
+      try {
+        const ss = await api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+        const sheets = (ss.data.sheets || []).map(s => s.properties?.title);
+        result.steps.push({ name: "spreadsheet_access", ok: true, data: { title: ss.data.properties?.title, sheets } });
+
+        // Step 4: Try to read Users sheet
+        try {
+          const vals = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: "Users!A:Z" });
+          const rows = (vals.data.values || []).length;
+          result.steps.push({ name: "read_users", ok: true, data: { rowCount: rows } });
+        } catch (e) {
+          result.steps.push({ name: "read_users", ok: false, error: e.message, code: e.code });
+        }
+
+        // Step 5: Try to append to Users sheet (dry-run check)
+        try {
+          await api.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID, range: "Users!A:Z",
+            valueInputOption: "RAW",
+            requestBody: { values: [["test_id", "test_name", "test_user", "test_hash", "test_role", "test_date"]] },
+          });
+          result.steps.push({ name: "append_test", ok: true });
+          // Delete the test row
+          try {
+            const ss2 = await api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+            const sheet = ss2.data.sheets.find(s => s.properties?.title === "Users");
+            const sheetId = sheet?.properties?.sheetId ?? 0;
+            const vals2 = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: "Users!A:Z" });
+            const rowCount = (vals2.data.values || []).length;
+            await api.spreadsheets.batchUpdate({
+              spreadsheetId: SPREADSHEET_ID,
+              requestBody: { requests: [{ deleteDimension: { range: { sheetId, dimension: "ROWS", startIndex: rowCount - 1, endIndex: rowCount } } }] },
+            });
+          } catch (_) { /* ignore cleanup error */ }
+        } catch (e) {
+          result.steps.push({ name: "append_test", ok: false, error: e.message, code: e.code });
+        }
+      } catch (e) {
+        result.steps.push({ name: "spreadsheet_access", ok: false, error: e.message, code: e.code });
+      }
+    } catch (e) {
+      result.steps.push({ name: "sheets_client", ok: false, error: e.message, code: e.code });
+    }
+  } catch (e) {
+    result.steps.push({ name: "unknown_error", ok: false, error: e.message });
+  }
+
+  res.json(result);
+});
 
 // --- START ---
 async function start() {

@@ -53,10 +53,19 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
   useEffect(() => {
     api
       .hasAdmin()
-      .then(({ hasAdmin }) => setHasAdmin(hasAdmin))
+      .then((data) => {
+        if (data.hasAdmin === null) {
+          // Google Sheets unreachable — show error
+          setError(data.error || "Server tidak dapat terhubung ke database. Periksa konfigurasi Google Sheets.");
+          setHasAdmin(false);
+        } else {
+          setHasAdmin(data.hasAdmin);
+        }
+      })
       .catch(() => {
-        // Backend unreachable — assume admin exists so login button enables
+        // Backend completely unreachable — enable login button anyway
         setHasAdmin(true);
+        setError("Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif.");
       });
   }, []);
 
