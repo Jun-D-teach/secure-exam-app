@@ -55,17 +55,17 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       .hasAdmin()
       .then((data) => {
         if (data.hasAdmin === null) {
-          // Google Sheets unreachable — show error
+          // Google Sheets unreachable — show error but don't show bootstrap
           setError(data.error || "Server tidak dapat terhubung ke database. Periksa konfigurasi Google Sheets.");
-          setHasAdmin(false);
+          setHasAdmin(null);
         } else {
           setHasAdmin(data.hasAdmin);
         }
       })
       .catch(() => {
-        // Backend completely unreachable — enable login button anyway
-        setHasAdmin(true);
+        // Backend completely unreachable
         setError("Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif.");
+        setHasAdmin(null);
       });
   }, []);
 
