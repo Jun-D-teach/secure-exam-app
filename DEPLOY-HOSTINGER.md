@@ -8,7 +8,7 @@ Browser (React SPA) → server.js (Express) → Google Sheets API
                     Hostinger Node.js (Express preset)
 ```
 
-Satu file `server.js` di root = entry point yang handle semua: API + static files.
+Satu file `server.cjs` di root = entry point yang handle semua: API + static files. Pakai `.cjs` karena package.json punya `"type": "module"` tapi server pakai CommonJS (`require`/`module.exports`).
 
 ---
 
@@ -93,10 +93,10 @@ npm install && npx vite build
 
 ### 3.3 Entry File
 ```
-server.js
+server.cjs
 ```
 
-> Hostinger akan menjalankan: `node server.js`
+> ⚠️ **PENTING**: Gunakan `server.cjs` (bukan `server.js`). File `.cjs` dipaksa CommonJS oleh Node.js meskipun package.json punya `"type": "module"`. Kalau pakai `server.js`, server akan crash karena `require is not defined in ES module scope`.
 
 ### 3.4 Environment Variables
 
@@ -147,7 +147,7 @@ Pastikan build command: `npm install && npx vite build`
 
 ### Error "Server backend belum berjalan"
 Express server belum start. Cek:
-1. Entry file = `server.js` (bukan `server/index.js`)
+1. Entry file = `server.cjs` (bukan `server.js` atau `server/index.js`)
 2. Port sesuai env var `PORT`
 3. Log errors di Hostinger panel
 
@@ -156,8 +156,12 @@ Express server belum start. Cek:
 2. Spreadsheet ID benar
 3. Private Key lengkap
 
+### 503 Service Unavailable / server crash
+- Pastikan entry file = `server.cjs` (bukan `server.js`!) — karena `"type": "module"` di package.json
+- Cek log error di Hostinger panel
+
 ### MIME type error "text/plain" untuk JS files
-Artinya server tidak jalan — static files dilayani oleh web server default (Apache/Nginx). Pastikan `node server.js` berjalan.
+Artinya server tidak jalan — static files dilayani oleh web server default (Apache/Nginx). Pastikan `node server.cjs` berjalan.
 
 ---
 
@@ -165,7 +169,7 @@ Artinya server tidak jalan — static files dilayani oleh web server default (Ap
 
 ```
 project-root/
-├── server.js            ← Entry point (Express server + semua API)
+├── server.cjs           ← Entry point (Express server + semua API)
 ├── package.json         ← Dependencies
 ├── dist/                ← Frontend build output (Vite)
 ├── server/              ← Server source (TypeScript, untuk reference)
@@ -176,7 +180,7 @@ project-root/
 └── src/                 ← Frontend source (React)
 ```
 
-> **Catatan**: `server.js` adalah versi plain JavaScript yang dijalankan Hostinger. File di `server/` adalah source TypeScript untuk development.
+> **Catatan**: `server.cjs` adalah versi plain JavaScript (CommonJS) yang dijalankan Hostinger. File di `server/` adalah source TypeScript untuk development.
 
 ---
 

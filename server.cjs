@@ -124,7 +124,7 @@ function generateId() {
 }
 
 // --- Auth helpers ---
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const JWT_SECRET = process.env.JWT_SECRET || "ujiankita-secret-change-in-production";
