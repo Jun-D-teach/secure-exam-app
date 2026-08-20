@@ -60,7 +60,6 @@ export { Menubar, MenubarMenu, MenubarTrigger, MenubarContent, MenubarItem, Menu
 // Form Components
 export { Select, SelectGroup, SelectValue, SelectTrigger, SelectContent, SelectLabel, SelectItem, SelectSeparator, SelectScrollUpButton, SelectScrollDownButton } from "./select"; // ~6KB - Dropdown select
 export { Form, FormItem, FormLabel, FormControl, FormDescription, FormMessage, FormField } from "./form"; // ~4KB - Form wrapper with validation
-export { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator } from "./input-otp"; // ~5KB - OTP input
 
 // Content Display
 export { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "./accordion"; // ~5KB - Collapsible sections
@@ -83,7 +82,6 @@ export { Command, CommandDialog, CommandInput, CommandList, CommandEmpty, Comman
 export { Pagination, PaginationContent, PaginationEllipsis, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "./pagination"; // ~5KB
 
 // Layout Components
-export { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "./resizable"; // ~8KB - Resizable panels
 export { Sidebar, SidebarProvider, SidebarTrigger, SidebarInset, SidebarHeader, SidebarFooter, SidebarContent, SidebarGroup, SidebarGroupLabel, SidebarGroupAction, SidebarGroupContent, SidebarMenu, SidebarMenuItem, SidebarMenuButton, SidebarMenuAction, SidebarMenuSub, SidebarMenuSubItem, SidebarMenuSubButton, SidebarMenuBadge, SidebarSeparator, SidebarRail } from "./sidebar"; // ~10KB
 
 // Data Visualization

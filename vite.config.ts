@@ -21,6 +21,8 @@ export default defineConfig({
     sourcemap: false,
     // Optimize chunk splitting
     rollupOptions: {
+      // Externalize packages imported by read-only toolbar file (not part of app bundle)
+      external: ['@zumer/snapdom'],
       output: {
         // Manual chunk splitting for better caching and lazy loading
         manualChunks: {

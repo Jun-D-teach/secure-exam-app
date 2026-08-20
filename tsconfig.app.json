@@ -28,5 +28,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "vly-toolbar-readonly.tsx"]
+  "include": ["src"],
+  "exclude": ["../vly-toolbar-readonly.tsx"]
 }
