@@ -8,7 +8,7 @@ Browser (React SPA) → server.js (Express) → Google Sheets API
                     Hostinger Node.js (Express preset)
 ```
 
-Satu file `server.cjs` di root = entry point yang handle semua: API + static files. Pakai `.cjs` karena package.json punya `"type": "module"` tapi server pakai CommonJS (`require`/`module.exports`).
+Satu file `server.js` di root = entry point yang handle semua: API + static files. CommonJS (`require`/`module.exports`), tidak perlu TypeScript compiler atau `tsx`.
 
 ---
 
@@ -87,16 +87,14 @@ git push origin main
 - Klik **Ubah**
 
 ### 3.2 Build Command
-```
-npm install && npx vite build
-```
+Tidak perlu custom build — Hostinger otomatis menjalankan `npm install`.
 
 ### 3.3 Entry File
 ```
-server.cjs
+server.js
 ```
 
-> ⚠️ **PENTING**: Gunakan `server.cjs` (bukan `server.js`). File `.cjs` dipaksa CommonJS oleh Node.js meskipun package.json punya `"type": "module"`. Kalau pakai `server.js`, server akan crash karena `require is not defined in ES module scope`.
+> ⚠️ **PENTING**: File `server.js` di root adalah CommonJS murni. `package.json` **tidak** punya `"type": "module"`, jadi Node.js menjalankannya sebagai CommonJS secara default. Tidak perlu `.cjs` extension.
 
 ### 3.4 Environment Variables
 
@@ -138,8 +136,11 @@ Response: `{"status":"ok","timestamp":...}`
 
 ## Troubleshooting
 
-### Build error: "vite not found"
-Pastikan build command: `npm install && npx vite build`
+### 503 Service Unavailable
+Server `server.js` crash. Cek:
+1. Entry file = `server.js` (bukan `server.cjs` atau `server/index.js`)
+2. Environment variables sudah lengkap (terutama `GOOGLE_PRIVATE_KEY`)
+3. Log errors di Hostinger panel
 
 ### Login button tidak aktif
 - Cek `/api/health` — jika tidak bisa diakses, server belum jalan
@@ -147,21 +148,17 @@ Pastikan build command: `npm install && npx vite build`
 
 ### Error "Server backend belum berjalan"
 Express server belum start. Cek:
-1. Entry file = `server.cjs` (bukan `server.js` atau `server/index.js`)
+1. Entry file = `server.js`
 2. Port sesuai env var `PORT`
 3. Log errors di Hostinger panel
 
 ### Google Sheets error
 1. Service account di-share ke spreadsheet (Editor access)
 2. Spreadsheet ID benar
-3. Private Key lengkap
-
-### 503 Service Unavailable / server crash
-- Pastikan entry file = `server.cjs` (bukan `server.js`!) — karena `"type": "module"` di package.json
-- Cek log error di Hostinger panel
+3. Private Key lengkap dan format benar (ada `\n` sebagai baris baru)
 
 ### MIME type error "text/plain" untuk JS files
-Artinya server tidak jalan — static files dilayani oleh web server default (Apache/Nginx). Pastikan `node server.cjs` berjalan.
+Artinya server tidak jalan — static files dilayani oleh web server default. Pastikan `node server.js` berjalan.
 
 ---
 
@@ -169,18 +166,18 @@ Artinya server tidak jalan — static files dilayani oleh web server default (Ap
 
 ```
 project-root/
-├── server.cjs           ← Entry point (Express server + semua API)
-├── package.json         ← Dependencies
+├── server.js            ← Entry point (Express server + semua API, CommonJS)
+├── package.json         ← Dependencies (TANPA "type": "module")
 ├── dist/                ← Frontend build output (Vite)
-├── server/              ← Server source (TypeScript, untuk reference)
+├── server/              ← Server source (TypeScript, untuk reference/dev)
 │   ├── index.ts
 │   ├── db/sheets.ts
 │   ├── routes/
 │   └── middleware/
-└── src/                 ← Frontend source (React)
+└── src/                 ← Frontend source (React + TypeScript)
 ```
 
-> **Catatan**: `server.cjs` adalah versi plain JavaScript (CommonJS) yang dijalankan Hostinger. File di `server/` adalah source TypeScript untuk development.
+> **Catatan**: `server.js` adalah versi plain JavaScript (CommonJS) yang dijalankan Hostinger. File di `server/` adalah source TypeScript untuk development.
 
 ---
 
