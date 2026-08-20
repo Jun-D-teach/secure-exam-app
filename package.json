@@ -56,7 +56,6 @@
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.0",
     "framer-motion": "^12.23.25",
-    "googleapis": "^140.0.1",
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.555.0",
     "next-themes": "^0.4.6",

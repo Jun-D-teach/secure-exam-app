@@ -1,6 +1,9 @@
 /**
  * UjianKita - Express.js Server Entry Point
  * Compatible with Hostinger Express preset (runs with `node server.js`)
+ *
+ * Google Sheets integration uses direct Node.js crypto + HTTPS
+ * (bypasses googleapis/gtoken/jwa to avoid OpenSSL 3.x DECODER errors)
  */
 
 // IMMEDIATE startup log
@@ -21,8 +24,11 @@ var express = require("express");
 var cors = require("cors");
 var path = require("path");
 var fs = require("fs");
+var crypto = require("crypto");
+var https = require("https");
+var http = require("http");
 
-console.log("[UjianKita] Dependencies loaded");
+console.log("[UjianKita] Dependencies loaded (express, cors, crypto, https)");
 
 var app = express();
 var PORT = process.env.PORT || 3001;
@@ -30,19 +36,14 @@ var PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-// --- Google Sheets ---
-var googleapis;
-try {
-  googleapis = require("googleapis");
-  console.log("[UjianKita] googleapis loaded");
-} catch (e) {
-  console.error("[UjianKita] FAILED to load googleapis:", e.message);
-}
+// ============================================================
+//  GOOGLE SHEETS (Direct implementation - no googleapis library)
+// ============================================================
 
 var SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "";
 var SA_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
 
-// --- Normalize Google private key using charCodeAt (avoids all regex escaping issues) ---
+// --- Normalize private key ---
 function normalizePemKey(raw) {
   if (!raw) return "";
   var s = raw;
@@ -55,33 +56,20 @@ function normalizePemKey(raw) {
     }
   }
   // Multi-pass: convert all escaped newlines to real newlines
-  // Pass 1-5 handles up to 5 levels of escaping
   for (var pass = 0; pass < 5; pass++) {
     var changed = false;
     var out = [];
     for (var i = 0; i < s.length; i++) {
       var c = s.charCodeAt(i);
       if (c === 13) {
-        // CR: skip if followed by LF (handle CRLF)
         if (i + 1 < s.length && s.charCodeAt(i + 1) === 10) i++;
         out.push("\n");
         changed = true;
       } else if (c === 92 && i + 1 < s.length) {
-        // Backslash: check next char
         var nc = s.charCodeAt(i + 1);
-        if (nc === 110) {
-          // \n -> newline
-          out.push("\n");
-          i++;
-          changed = true;
-        } else if (nc === 114) {
-          // \r -> CR (will become newline on next pass if CRLF)
-          out.push("\r");
-          i++;
-          changed = true;
-        } else {
-          out.push(s.charAt(i));
-        }
+        if (nc === 110) { out.push("\n"); i++; changed = true; }
+        else if (nc === 114) { out.push("\r"); i++; changed = true; }
+        else { out.push(s.charAt(i)); }
       } else {
         out.push(s.charAt(i));
       }
@@ -89,53 +77,142 @@ function normalizePemKey(raw) {
     s = out.join("");
     if (!changed) break;
   }
-  // Collapse multiple blank lines
-  var final = [];
-  var blankCount = 0;
-  for (var i = 0; i < s.length; i++) {
-    if (s.charCodeAt(i) === 10) {
-      blankCount++;
-      if (blankCount <= 2) final.push("\n");
-    } else {
-      blankCount = 0;
-      final.push(s.charAt(i));
-    }
-  }
-  return final.join("").trim();
+  s = s.replace(/\n{3,}/g, "\n\n");
+  return s.trim();
 }
 
-var SA_KEY = normalizePemKey(process.env.GOOGLE_PRIVATE_KEY || "");
+// Support GOOGLE_PRIVATE_KEY_B64 (base64-encoded) - most reliable!
+var SA_KEY = "";
+if (process.env.GOOGLE_PRIVATE_KEY_B64) {
+  try {
+    SA_KEY = Buffer.from(process.env.GOOGLE_PRIVATE_KEY_B64, "base64").toString("utf-8").trim();
+    console.log("[UjianKita] Private key loaded from GOOGLE_PRIVATE_KEY_B64 (" + SA_KEY.length + " chars)");
+  } catch (e) {
+    console.error("[UjianKita] Failed to decode GOOGLE_PRIVATE_KEY_B64:", e.message);
+  }
+}
+if (!SA_KEY && process.env.GOOGLE_PRIVATE_KEY) {
+  SA_KEY = normalizePemKey(process.env.GOOGLE_PRIVATE_KEY);
+  console.log("[UjianKita] Private key loaded from GOOGLE_PRIVATE_KEY (" + SA_KEY.length + " chars)");
+}
 
-// Diagnostic logging
+// Validate PEM format
+if (SA_KEY) {
+  var hasBegin = SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 || SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0;
+  var hasEnd = SA_KEY.indexOf("-----END PRIVATE KEY-----") > -1 || SA_KEY.indexOf("-----END RSA PRIVATE KEY-----") > -1;
+  console.log("[UjianKita] Key validation:", { hasBegin: hasBegin, hasEnd: hasEnd, lines: SA_KEY.split("\n").length });
+  if (!hasBegin) console.error("[UjianKita] WARNING: Key missing BEGIN marker. First 60 chars:", SA_KEY.substring(0, 60));
+  if (!hasEnd) console.error("[UjianKita] WARNING: Key missing END marker. Last 60 chars:", SA_KEY.substring(SA_KEY.length - 60));
+
+  // Test if crypto can parse the key
+  try {
+    var testKey = crypto.createPrivateKey({ key: SA_KEY, format: "pem" });
+    console.log("[UjianKita] Key crypto validation: OK (type:", testKey.type, ", bits:", testKey.asymmetricKeyBits, ")");
+  } catch (e) {
+    console.error("[UjianKita] Key crypto validation FAILED:", e.message);
+    console.error("[UjianKita] This is the root cause of DECODER errors!");
+    console.error("[UjianKita] TIP: Set GOOGLE_PRIVATE_KEY_B64 env var with base64-encoded key");
+  }
+} else {
+  console.error("[UjianKita] No private key found! Set GOOGLE_PRIVATE_KEY or GOOGLE_PRIVATE_KEY_B64");
+}
+
 console.log("[UjianKita] ENV check:", {
   hasSpreadsheetId: !!SPREADSHEET_ID,
   hasServiceAccountEmail: !!SA_EMAIL,
   hasPrivateKey: !!SA_KEY,
   keyLength: SA_KEY.length,
-  hasBeginMarker: SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 || SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0,
-  hasEndMarker: SA_KEY.indexOf("-----END PRIVATE KEY-----") > -1,
-  lineCount: SA_KEY.split("\n").length,
   nodeEnv: process.env.NODE_ENV || "(not set)",
 });
 
-// Validate PEM format
-if (SA_KEY && SA_KEY.indexOf("-----BEGIN") !== 0) {
-  console.error("[UjianKita] WARNING: Private key does not start with -----BEGIN. First 50 chars:", SA_KEY.substring(0, 50));
-}
-if (SA_KEY && SA_KEY.indexOf("-----END") === -1) {
-  console.error("[UjianKita] WARNING: Private key does not contain -----END marker");
+// --- JWT + OAuth2 for Google API access ---
+var _accessToken = null;
+var _tokenExpiry = 0;
+
+function base64url(str) {
+  return Buffer.from(str).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-var _sheets = null;
-
-async function getSheets() {
-  if (_sheets) return _sheets;
-  var auth = new googleapis.google.auth.GoogleAuth({
-    credentials: { client_email: SA_EMAIL, private_key: SA_KEY },
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+async function createSignedJwt() {
+  var now = Math.floor(Date.now() / 1000);
+  var header = JSON.stringify({ alg: "RS256", typ: "JWT" });
+  var claim = JSON.stringify({
+    iss: SA_EMAIL,
+    scope: "https://www.googleapis.com/auth/spreadsheets",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now,
   });
-  _sheets = googleapis.google.sheets({ version: "v4", auth });
-  return _sheets;
+  var signInput = base64url(header) + "." + base64url(claim);
+  var sign = crypto.createSign("RSA-SHA256");
+  sign.update(signInput);
+  sign.end();
+  var signature = sign.sign(SA_KEY, "base64url");
+  return signInput + "." + signature;
+}
+
+function httpsRequest(url, options, body) {
+  return new Promise(function (resolve, reject) {
+    var parsed = new (require("url").URL)(url);
+    var mod = parsed.protocol === "https:" ? https : http;
+    var req = mod.request(url, options, function (res) {
+      var chunks = [];
+      res.on("data", function (chunk) { chunks.push(chunk); });
+      res.on("end", function () {
+        var data = Buffer.concat(chunks).toString("utf-8");
+        try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+        catch (e) { resolve({ status: res.statusCode, data: data }); }
+      });
+    });
+    req.on("error", reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function getAccessToken() {
+  if (_accessToken && Date.now() < _tokenExpiry) return _accessToken;
+  console.log("[UjianKita] Requesting new access token...");
+  var jwt = await createSignedJwt();
+  var body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=" + encodeURIComponent(jwt);
+  var res = await httpsRequest("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) },
+  }, body);
+  if (res.status !== 200 || !res.data.access_token) {
+    throw new Error("Failed to get access token (HTTP " + res.status + "): " + JSON.stringify(res.data));
+  }
+  _accessToken = res.data.access_token;
+  _tokenExpiry = Date.now() + (res.data.expires_in - 60) * 1000;
+  console.log("[UjianKita] Access token obtained, expires in", res.data.expires_in, "seconds");
+  return _accessToken;
+}
+
+async function sheetsApi(method, path, body) {
+  var token = await getAccessToken();
+  var url = "https://sheets.googleapis.com/v4/spreadsheets/" + SPREADSHEET_ID + path;
+  var bodyStr = body ? JSON.stringify(body) : null;
+  var opts = {
+    method: method,
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Content-Type": "application/json",
+    },
+  };
+  if (bodyStr) opts.headers["Content-Length"] = Buffer.byteLength(bodyStr);
+  var res = await httpsRequest(url, opts, bodyStr);
+  if (res.status === 401) {
+    // Token expired, retry once
+    _accessToken = null;
+    _tokenExpiry = 0;
+    token = await getAccessToken();
+    opts.headers["Authorization"] = "Bearer " + token;
+    res = await httpsRequest(url, opts, bodyStr);
+  }
+  if (res.status < 200 || res.status >= 300) {
+    throw new Error("Sheets API error (HTTP " + res.status + "): " + JSON.stringify(res.data));
+  }
+  return res.data;
 }
 
 // --- Sheet config ---
@@ -154,9 +231,8 @@ HEADERS[SHEETS.ATTEMPTS] = ["id", "exam_id", "student_id", "status", "started_at
 
 // --- Sheet helpers ---
 async function readSheet(sheetName) {
-  var api = await getSheets();
-  var res = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: sheetName + "!A:Z" });
-  var rows = res.data.values || [];
+  var data = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
+  var rows = data.values || [];
   if (rows.length < 2) return [];
   var headers = rows[0];
   return rows.slice(1).map(function (row) {
@@ -172,29 +248,25 @@ async function findByField(sheetName, field, value) {
 }
 
 async function addRow(sheetName, data) {
-  var api = await getSheets();
   var headers = HEADERS[sheetName];
   if (!headers) throw new Error("Unknown sheet: " + sheetName);
   var row = headers.map(function (h) { return data[h] || ""; });
-  await api.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID, range: sheetName + "!A:Z",
-    valueInputOption: "RAW", requestBody: { values: [row] },
+  await sheetsApi("POST", "/values/" + sheetName + "!A:Z:append?valueInputOption=RAW", {
+    values: [row],
   });
 }
 
 async function updateRow(sheetName, id, data) {
-  var api = await getSheets();
   var headers = HEADERS[sheetName];
   if (!headers) throw new Error("Unknown sheet: " + sheetName);
-  var res = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: sheetName + "!A:Z" });
-  var rows = res.data.values || [];
+  var data2 = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
+  var rows = data2.values || [];
   var idIdx = headers.indexOf("id");
   for (var i = 1; i < rows.length; i++) {
     if (rows[i][idIdx] === id) {
       var updated = headers.map(function (h) { return data[h] !== undefined ? data[h] : (rows[i][headers.indexOf(h)] || ""); });
-      await api.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID, range: sheetName + "!A" + (i + 1) + ":Z" + (i + 1),
-        valueInputOption: "RAW", requestBody: { values: [updated] },
+      await sheetsApi("PUT", "/values/" + sheetName + "!A" + (i + 1) + ":Z" + (i + 1) + "?valueInputOption=RAW", {
+        values: [updated],
       });
       return true;
     }
@@ -203,20 +275,19 @@ async function updateRow(sheetName, id, data) {
 }
 
 async function deleteRow(sheetName, id) {
-  var api = await getSheets();
   var headers = HEADERS[sheetName];
   if (!headers) throw new Error("Unknown sheet: " + sheetName);
-  var res = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: sheetName + "!A:Z" });
-  var rows = res.data.values || [];
+  var data = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
+  var rows = data.values || [];
   var idIdx = headers.indexOf("id");
   for (var i = 1; i < rows.length; i++) {
     if (rows[i][idIdx] === id) {
-      var ss = await api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-      var sheet = ss.data.sheets.find(function (s) { return s.properties && s.properties.title === sheetName; });
+      // Get sheet ID from metadata
+      var meta = await sheetsApi("GET", "");
+      var sheet = (meta.sheets || []).find(function (s) { return s.properties && s.properties.title === sheetName; });
       var sheetId = (sheet && sheet.properties && sheet.properties.sheetId) || 0;
-      await api.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: { requests: [{ deleteDimension: { range: { sheetId: sheetId, dimension: "ROWS", startIndex: i, endIndex: i + 1 } } }] },
+      await sheetsApi("POST", ":batchUpdate", {
+        requests: [{ deleteDimension: { range: { sheetId: sheetId, dimension: "ROWS", startIndex: i, endIndex: i + 1 } } }],
       });
       return true;
     }
@@ -264,35 +335,58 @@ function requireRole(roles) {
 
 // --- HEALTH CHECK ---
 app.get("/api/health", function (_req, res) {
-  res.json({ status: "ok", timestamp: Date.now(), port: PORT });
+  res.json({ status: "ok", timestamp: Date.now(), port: PORT, node: process.version });
 });
 
 // --- DEBUG: Google Sheets diagnostic ---
 app.get("/api/debug/sheets", async function (_req, res) {
-  var result = { steps: [] };
+  var result = { steps: [], node: process.version };
   try {
     result.steps.push({ name: "env_check", ok: true, data: {
       hasSpreadsheetId: !!SPREADSHEET_ID, hasServiceAccountEmail: !!SA_EMAIL,
       hasPrivateKey: !!SA_KEY, keyLength: SA_KEY.length,
+      keyFormat: SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 ? "PKCS8" : SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0 ? "PKCS1" : "UNKNOWN",
     }});
+    // Test key parsing
     try {
-      var api = await getSheets();
-      result.steps.push({ name: "sheets_client", ok: true });
-      try {
-        var ss = await api.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-        var sheets = (ss.data.sheets || []).map(function (s) { return s.properties && s.properties.title; });
-        result.steps.push({ name: "spreadsheet_access", ok: true, data: { title: ss.data.properties && ss.data.properties.title, sheets: sheets } });
-        try {
-          var vals = await api.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: "Users!A:Z" });
-          result.steps.push({ name: "read_users", ok: true, data: { rowCount: (vals.data.values || []).length } });
-        } catch (e) {
-          result.steps.push({ name: "read_users", ok: false, error: e.message });
-        }
-      } catch (e) {
-        result.steps.push({ name: "spreadsheet_access", ok: false, error: e.message });
-      }
+      var testKey = crypto.createPrivateKey({ key: SA_KEY, format: "pem" });
+      result.steps.push({ name: "key_parse", ok: true, data: { type: testKey.type, bits: testKey.asymmetricKeyBits } });
     } catch (e) {
-      result.steps.push({ name: "sheets_client", ok: false, error: e.message });
+      result.steps.push({ name: "key_parse", ok: false, error: e.message });
+      return res.json(result);
+    }
+    // Test JWT signing
+    try {
+      var jwt = await createSignedJwt();
+      result.steps.push({ name: "jwt_sign", ok: true, data: { jwtLength: jwt.length } });
+    } catch (e) {
+      result.steps.push({ name: "jwt_sign", ok: false, error: e.message });
+      return res.json(result);
+    }
+    // Test access token
+    try {
+      _accessToken = null;
+      var token = await getAccessToken();
+      result.steps.push({ name: "access_token", ok: true });
+    } catch (e) {
+      result.steps.push({ name: "access_token", ok: false, error: e.message });
+      return res.json(result);
+    }
+    // Test spreadsheet access
+    try {
+      var meta = await sheetsApi("GET", "");
+      var sheets = (meta.sheets || []).map(function (s) { return s.properties && s.properties.title; });
+      result.steps.push({ name: "spreadsheet_access", ok: true, data: { title: meta.properties && meta.properties.title, sheets: sheets } });
+    } catch (e) {
+      result.steps.push({ name: "spreadsheet_access", ok: false, error: e.message });
+      return res.json(result);
+    }
+    // Test read Users
+    try {
+      var vals = await sheetsApi("GET", "/values/Users!A:Z");
+      result.steps.push({ name: "read_users", ok: true, data: { rowCount: (vals.values || []).length } });
+    } catch (e) {
+      result.steps.push({ name: "read_users", ok: false, error: e.message });
     }
   } catch (e) {
     result.steps.push({ name: "unknown_error", ok: false, error: e.message });
@@ -311,7 +405,7 @@ app.post("/api/auth/login", async function (req, res) {
     if (!(await verifyPassword(password, user.password_hash))) return res.status(401).json({ error: "Username atau password salah" });
     var token = generateToken({ userId: user.id, username: user.username, role: user.role });
     res.json({ token: token, user: { id: user.id, name: user.name, username: user.username, role: user.role } });
-  } catch (e) { console.error("[UjianKita] Login error:", e); res.status(500).json({ error: "Gagal login" }); }
+  } catch (e) { console.error("[UjianKita] Login error:", e.message); res.status(500).json({ error: "Gagal login: " + e.message }); }
 });
 
 app.post("/api/auth/bootstrap-admin", async function (req, res) {
@@ -327,7 +421,7 @@ app.post("/api/auth/bootstrap-admin", async function (req, res) {
     if (await findByField(SHEETS.USERS, "username", username)) return res.status(400).json({ error: "Username sudah dipakai" });
     await addRow(SHEETS.USERS, { id: generateId(), name: name.trim() || username, username: username, password_hash: await hashPassword(password), role: "admin", created_at: new Date().toISOString() });
     res.json({ message: "Akun admin berhasil dibuat" });
-  } catch (e) { console.error("[UjianKita] Bootstrap error:", e); res.status(500).json({ error: "Gagal membuat akun admin: " + (e.message || "Periksa Google Sheets.") }); }
+  } catch (e) { console.error("[UjianKita] Bootstrap error:", e.message); res.status(500).json({ error: "Gagal membuat akun admin: " + e.message }); }
 });
 
 app.post("/api/auth/reset-admin", async function (req, res) {
@@ -355,7 +449,7 @@ app.post("/api/auth/reset-admin", async function (req, res) {
     }
     await updateRow(SHEETS.USERS, admin.id, updates);
     res.json({ message: "Admin berhasil direset", username: updates.username || admin.username });
-  } catch (e) { console.error("[UjianKita] Reset error:", e); res.status(500).json({ error: "Gagal mereset admin" }); }
+  } catch (e) { console.error("[UjianKita] Reset error:", e.message); res.status(500).json({ error: "Gagal mereset admin: " + e.message }); }
 });
 
 app.get("/api/auth/has-admin", async function (_req, res) {
@@ -364,7 +458,7 @@ app.get("/api/auth/has-admin", async function (_req, res) {
     res.json({ hasAdmin: users.some(function (u) { return u.role === "admin"; }) });
   } catch (e) {
     console.error("[UjianKita] has-admin error:", e.message);
-    res.status(500).json({ hasAdmin: null, error: "Gagal terhubung ke Google Sheets: " + (e.message || "Periksa konfigurasi.") });
+    res.status(500).json({ hasAdmin: null, error: "Gagal terhubung ke Google Sheets: " + e.message });
   }
 });
 
@@ -373,7 +467,7 @@ app.get("/api/auth/me", authenticate, async function (req, res) {
     var user = await findByField(SHEETS.USERS, "id", req.user.userId);
     if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
     res.json({ id: user.id, name: user.name, username: user.username, role: user.role });
-  } catch (e) { console.error("[UjianKita] me error:", e); res.status(500).json({ error: "Gagal mengambil data" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil data" }); }
 });
 
 app.put("/api/auth/me", authenticate, async function (req, res) {
@@ -397,7 +491,7 @@ app.put("/api/auth/me", authenticate, async function (req, res) {
       return res.json({ message: "Profil berhasil diubah", token: newToken });
     }
     res.json({ message: "Profil berhasil diubah" });
-  } catch (e) { console.error("[UjianKita] update profile error:", e); res.status(500).json({ error: "Gagal mengubah profil" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengubah profil" }); }
 });
 
 app.post("/api/auth/change-password", authenticate, async function (req, res) {
@@ -412,7 +506,7 @@ app.post("/api/auth/change-password", authenticate, async function (req, res) {
     if (!(await verifyPassword(currentPassword, user.password_hash))) return res.status(401).json({ error: "Password lama salah" });
     await updateRow(SHEETS.USERS, user.id, { password_hash: await hashPassword(newPassword) });
     res.json({ message: "Password berhasil diubah" });
-  } catch (e) { console.error("[UjianKita] change-pw error:", e); res.status(500).json({ error: "Gagal mengubah password" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengubah password" }); }
 });
 
 // --- USERS ---
@@ -420,7 +514,7 @@ app.get("/api/users", authenticate, requireRole(["admin"]), async function (_req
   try {
     var users = await readSheet(SHEETS.USERS);
     res.json(users.map(function (u) { return { id: u.id, name: u.name, username: u.username, role: u.role, created_at: u.created_at }; }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar pengguna" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar pengguna: " + e.message }); }
 });
 
 app.post("/api/users", authenticate, requireRole(["admin"]), async function (req, res) {
@@ -436,7 +530,7 @@ app.post("/api/users", authenticate, requireRole(["admin"]), async function (req
     if (await findByField(SHEETS.USERS, "username", username)) return res.status(400).json({ error: "Username sudah dipakai" });
     await addRow(SHEETS.USERS, { id: generateId(), name: name.trim() || username, username: username, password_hash: await hashPassword(password), role: role, created_at: new Date().toISOString() });
     res.json({ message: "Akun berhasil dibuat" });
-  } catch (e) { res.status(500).json({ error: "Gagal membuat akun" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal membuat akun: " + e.message }); }
 });
 
 app.delete("/api/users/:id", authenticate, requireRole(["admin"]), async function (req, res) {
@@ -446,7 +540,7 @@ app.delete("/api/users/:id", authenticate, requireRole(["admin"]), async functio
     if (user.role === "admin") return res.status(400).json({ error: "Akun admin tidak bisa dihapus" });
     await deleteRow(SHEETS.USERS, req.params.id);
     res.json({ message: "Akun berhasil dihapus" });
-  } catch (e) { res.status(500).json({ error: "Gagal menghapus akun" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal menghapus akun: " + e.message }); }
 });
 
 app.post("/api/users/import", authenticate, requireRole(["admin"]), async function (req, res) {
@@ -477,12 +571,12 @@ app.post("/api/users/import", authenticate, requireRole(["admin"]), async functi
       created.push({ name: itemName || uname, username: uname, password: pw });
     }
     res.json(created);
-  } catch (e) { res.status(500).json({ error: "Gagal mengimpor pengguna" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengimpor pengguna: " + e.message }); }
 });
 
 // --- SUBJECTS ---
 app.get("/api/subjects", authenticate, async function (_req, res) {
-  try { res.json(await readSheet(SHEETS.SUBJECTS)); } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar mapel" }); }
+  try { res.json(await readSheet(SHEETS.SUBJECTS)); } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar mapel: " + e.message }); }
 });
 
 app.post("/api/subjects", authenticate, requireRole(["admin"]), async function (req, res) {
@@ -492,7 +586,7 @@ app.post("/api/subjects", authenticate, requireRole(["admin"]), async function (
     if (!name || !name.trim()) return res.status(400).json({ error: "Nama mapel wajib diisi" });
     await addRow(SHEETS.SUBJECTS, { id: generateId(), name: name.trim(), description: (description && description.trim()) || "", created_by: req.user.userId, created_at: new Date().toISOString() });
     res.json({ message: "Mapel berhasil ditambahkan" });
-  } catch (e) { res.status(500).json({ error: "Gagal menambahkan mapel" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal menambahkan mapel: " + e.message }); }
 });
 
 app.delete("/api/subjects/:id", authenticate, requireRole(["admin"]), async function (req, res) {
@@ -501,7 +595,7 @@ app.delete("/api/subjects/:id", authenticate, requireRole(["admin"]), async func
     if (!subjects.find(function (s) { return s.id === req.params.id; })) return res.status(404).json({ error: "Mapel tidak ditemukan" });
     await deleteRow(SHEETS.SUBJECTS, req.params.id);
     res.json({ message: "Mapel berhasil dihapus" });
-  } catch (e) { res.status(500).json({ error: "Gagal menghapus mapel" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal menghapus mapel: " + e.message }); }
 });
 
 // --- EXAMS ---
@@ -525,7 +619,7 @@ app.get("/api/exams", authenticate, async function (req, res) {
         endsAt: exam.ends_at ? parseInt(exam.ends_at) : undefined,
       });
     }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar ujian" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar ujian: " + e.message }); }
 });
 
 app.get("/api/exams/:id", authenticate, async function (req, res) {
@@ -542,7 +636,7 @@ app.get("/api/exams/:id", authenticate, async function (req, res) {
       startsAt: exam.starts_at ? parseInt(exam.starts_at) : undefined,
       endsAt: exam.ends_at ? parseInt(exam.ends_at) : undefined,
     }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data ujian" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil data ujian: " + e.message }); }
 });
 
 app.post("/api/exams", authenticate, requireRole(["teacher"]), async function (req, res) {
@@ -561,7 +655,7 @@ app.post("/api/exams", authenticate, requireRole(["teacher"]), async function (r
     if (!(await findByField(SHEETS.SUBJECTS, "id", subjectId))) return res.status(400).json({ error: "Mapel tidak ditemukan" });
     await addRow(SHEETS.EXAMS, { id: generateId(), title: title.trim(), subject_id: subjectId, description: (description && description.trim()) || "", google_form_url: googleFormUrl.trim(), duration_minutes: duration.toString(), is_active: "false", starts_at: "", ends_at: "", created_by: req.user.userId, created_at: new Date().toISOString() });
     res.json({ message: "Ujian berhasil dibuat sebagai draf" });
-  } catch (e) { res.status(500).json({ error: "Gagal membuat ujian" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal membuat ujian: " + e.message }); }
 });
 
 app.patch("/api/exams/:id/schedule", authenticate, requireRole(["admin"]), async function (req, res) {
@@ -575,7 +669,7 @@ app.patch("/api/exams/:id/schedule", authenticate, requireRole(["admin"]), async
     if (startsAt && endsAt && endsAt <= startsAt) return res.status(400).json({ error: "Waktu tutup harus setelah waktu buka" });
     await updateRow(SHEETS.EXAMS, req.params.id, { is_active: isActive ? "true" : "false", starts_at: startsAt ? startsAt.toString() : "", ends_at: endsAt ? endsAt.toString() : "" });
     res.json({ message: isActive ? "Ujian dipublikasikan" : "Ujian diarsipkan" });
-  } catch (e) { res.status(500).json({ error: "Gagal menyimpan jadwal" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal menyimpan jadwal: " + e.message }); }
 });
 
 app.get("/api/exams/:id/summary", authenticate, requireRole(["teacher"]), async function (req, res) {
@@ -592,7 +686,7 @@ app.get("/api/exams/:id/summary", authenticate, requireRole(["teacher"]), async 
       expired: ea.filter(function (a) { return a.status === "expired"; }).length,
       totalViolations: ea.reduce(function (s, a) { return s + parseInt(a.violation_count || "0"); }, 0),
     });
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil ringkasan" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil ringkasan: " + e.message }); }
 });
 
 app.get("/api/exams/:id/attempts", authenticate, requireRole(["teacher"]), async function (req, res) {
@@ -610,7 +704,7 @@ app.get("/api/exams/:id/attempts", authenticate, requireRole(["teacher"]), async
       });
     }).sort(function (a, b) { return parseInt(b.started_at || "0") - parseInt(a.started_at || "0"); });
     res.json(ea);
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data peserta" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil data peserta: " + e.message }); }
 });
 
 // --- ATTEMPTS ---
@@ -626,7 +720,7 @@ app.get("/api/attempts/my", authenticate, requireRole(["student"]), async functi
       });
     });
     res.json(myAttempts);
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan: " + e.message }); }
 });
 
 app.get("/api/attempts/my/:examId", authenticate, requireRole(["student"]), async function (req, res) {
@@ -640,7 +734,7 @@ app.get("/api/attempts/my/:examId", authenticate, requireRole(["student"]), asyn
       endsAt: parseInt(attempt.ends_at),
       completedAt: attempt.completed_at ? parseInt(attempt.completed_at) : undefined,
     }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan: " + e.message }); }
 });
 
 app.post("/api/attempts/start", authenticate, requireRole(["student"]), async function (req, res) {
@@ -663,7 +757,7 @@ app.post("/api/attempts/start", authenticate, requireRole(["student"]), async fu
     var durationMinutes = parseInt(exam.duration_minutes);
     await addRow(SHEETS.ATTEMPTS, { id: attemptId, exam_id: examId, student_id: req.user.userId, status: "in_progress", started_at: now.toString(), ends_at: (now + durationMinutes * 60000).toString(), completed_at: "", violation_count: "0", violations: "[]" });
     res.json({ id: attemptId });
-  } catch (e) { res.status(500).json({ error: "Gagal memulai ujian" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal memulai ujian: " + e.message }); }
 });
 
 app.post("/api/attempts/violation", authenticate, requireRole(["student"]), async function (req, res) {
@@ -680,7 +774,7 @@ app.post("/api/attempts/violation", authenticate, requireRole(["student"]), asyn
     violations.push({ type: type, at: Date.now() });
     await updateRow(SHEETS.ATTEMPTS, attemptId, { violation_count: (count + 1).toString(), violations: JSON.stringify(violations) });
     res.json({ message: "Pelanggaran tercatat" });
-  } catch (e) { res.status(500).json({ error: "Gagal mencatat pelanggaran" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mencatat pelanggaran: " + e.message }); }
 });
 
 app.post("/api/attempts/complete", authenticate, requireRole(["student"]), async function (req, res) {
@@ -695,7 +789,7 @@ app.post("/api/attempts/complete", authenticate, requireRole(["student"]), async
     var status = now > parseInt(attempt.ends_at) ? "expired" : "completed";
     await updateRow(SHEETS.ATTEMPTS, attemptId, { status: status, completed_at: now.toString() });
     res.json({ id: attemptId });
-  } catch (e) { res.status(500).json({ error: "Gagal menyelesaikan ujian" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal menyelesaikan ujian: " + e.message }); }
 });
 
 app.post("/api/attempts/expire", authenticate, requireRole(["student"]), async function (req, res) {
@@ -710,7 +804,7 @@ app.post("/api/attempts/expire", authenticate, requireRole(["student"]), async f
       await updateRow(SHEETS.ATTEMPTS, attemptId, { status: "expired", completed_at: now.toString() });
     }
     res.json({ id: attemptId });
-  } catch (e) { res.status(500).json({ error: "Gagal mengekspiresi ujian" }); }
+  } catch (e) { res.status(500).json({ error: "Gagal mengekspiresi ujian: " + e.message }); }
 });
 
 // --- STATIC FILES & SPA ---
@@ -733,6 +827,8 @@ console.log("[UjianKita] Starting server on port " + PORT + "...");
 app.listen(PORT, "0.0.0.0", function () {
   console.log("[UjianKita] Server running on port " + PORT);
   console.log("[UjianKita] API: http://localhost:" + PORT + "/api");
+  console.log("[UjianKita] Health: http://localhost:" + PORT + "/api/health");
+  console.log("[UjianKita] Debug: http://localhost:" + PORT + "/api/debug/sheets");
 });
 
 console.log("[UjianKita] app.listen() called, waiting for callback...");
