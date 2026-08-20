@@ -3,12 +3,12 @@
 ## Arsitektur
 
 ```
-Browser (React SPA) → Express.js Server → Google Sheets API
+Browser (React SPA) → server.js (Express) → Google Sheets API
                             ↓
-                    Hostinger Node.js Hosting
+                    Hostinger Node.js (Express preset)
 ```
 
-Express server serve **semuanya**: API routes + frontend static files dari satu port.
+Satu file `server.js` di root = entry point yang handle semua: API + static files.
 
 ---
 
@@ -38,7 +38,7 @@ Express server serve **semuanya**: API routes + frontend static files dari satu 
 
 ### 1.4 Share ke Service Account
 1. Buka spreadsheet → **Share**
-2. Tambah email service account (format: `xxx@project.iam.gserviceaccount.com`)
+2. Tambah email service account
 3. Akses: **Editor** → **Share**
 
 ### 1.5 Buat Sheet Tabs
@@ -64,7 +64,7 @@ id | title | subject_id | description | google_form_url | duration_minutes | is_
 id | exam_id | student_id | status | started_at | ends_at | completed_at | violation_count | violations
 ```
 
-> ⚠️ Headers harus persis seperti di atas. Aplikasi otomatis membuat tabs jika belum ada.
+> ⚠️ Headers harus persis. Aplikasi otomatis membuat tabs jika belum ada.
 
 ---
 
@@ -81,38 +81,28 @@ git push origin main
 ## Langkah 3: Setup di Hostinger Panel
 
 ### 3.1 Pilih Framework
-Di Hostinger panel → **Pengaturan dan deploy ulang**:
 - **Preset framework**: pilih **Express**
+- **Branch**: `main`
+- **Node version**: `20.x`
 - Klik **Ubah**
 
 ### 3.2 Build Command
-Set build command ke:
 ```
-npm install && npx tsc -b && npx vite build
-```
-
-> Build script akan:
-> 1. Install semua dependencies (termasuk devDependencies untuk TypeScript)
-> 2. Compile TypeScript (type checking)
-> 3. Build frontend ke folder `dist/`
-
-### 3.3 Start Command
-Set start command / entry point ke:
-```
-npx tsx server/index.ts
+npm install && npx vite build
 ```
 
-> Server Express akan:
-> 1. Listen di port yang ditentukan (biasanya 3000 atau 3001)
-> 2. Serve API routes di `/api/*`
-> 3. Serve frontend SPA dari `dist/`
+### 3.3 Entry File
+```
+server.js
+```
+
+> Hostinger akan menjalankan: `node server.js`
 
 ### 3.4 Environment Variables
-Set di Hostinger panel (atau file `.env`):
 
-| Variable | Value |
-|----------|-------|
-| `PORT` | `3001` (atau port yang ditentukan Hostinger) |
+| Key | Value |
+|-----|-------|
+| `PORT` | `3001` |
 | `NODE_ENV` | `production` |
 | `JWT_SECRET` | *(generate baru — lihat di bawah)* |
 | `GOOGLE_SHEET_ID` | `1jHpzXrNdjkdIW4QjLaCl6S8d1-obvz8lztvhiqJ7pYQ` |
@@ -133,75 +123,60 @@ Klik **Deploy ulang** / **Redeploy**
 ## Langkah 4: Verifikasi
 
 ### Cek Server
-Buka browser, akses:
 ```
 https://domain-kamu.com/api/health
 ```
-
-Response yang benar:
-```json
-{"status":"ok","timestamp":1234567890}
-```
+Response: `{"status":"ok","timestamp":...}`
 
 ### Cek Login
 1. Buka `https://domain-kamu.com`
 2. Klik **Login**
 3. Jika belum ada admin → form "Buat Akun Admin Pertama" muncul
-4. Isi nama, username, password → Login
-
-### Cek Google Sheets
-Buka spreadsheet kamu → tab `Users` → seharusnya ada baris admin yang baru dibuat.
+4. Isi → Login
 
 ---
 
 ## Troubleshooting
 
-### Build error: "tsc not found" atau "vite not found"
-Hostinger mungkin menjalankan `npm install --production`. Build command sudah include `npm install` untuk install semua dependencies. Jika masih error, pastikan:
-- Build command: `npm install && npx tsc -b && npx vite build`
+### Build error: "vite not found"
+Pastikan build command: `npm install && npx vite build`
 
-### Login button tidak aktif / tidak bisa klik
-- Cek apakah server backend berjalan: akses `/api/health`
-- Jika tidak bisa diakses, server belum jalan → cek log di Hostinger panel
+### Login button tidak aktif
+- Cek `/api/health` — jika tidak bisa diakses, server belum jalan
+- Cek **Node.js logs** di Hostinger panel
 
 ### Error "Server backend belum berjalan"
-Artinya Express server belum start. Cek:
-1. Start command benar: `npx tsx server/index.ts`
-2. Port sudah benar
+Express server belum start. Cek:
+1. Entry file = `server.js` (bukan `server/index.js`)
+2. Port sesuai env var `PORT`
 3. Log errors di Hostinger panel
 
 ### Google Sheets error
-1. Service account sudah di-share ke spreadsheet (Editor access)
+1. Service account di-share ke spreadsheet (Editor access)
 2. Spreadsheet ID benar
-3. Private Key lengkap (dengan `\n` yang benar)
-4. 4 tabs sudah ada (users, subjects, exams, attempts)
+3. Private Key lengkap
 
-### CORS errors
-Server sudah include CORS middleware. Jika masih error, pastikan前端 akses backend dari URL yang sama (satu domain).
+### MIME type error "text/plain" untuk JS files
+Artinya server tidak jalan — static files dilayani oleh web server default (Apache/Nginx). Pastikan `node server.js` berjalan.
 
 ---
 
-## Struktur Deploy
+## Struktur File
 
 ```
-hostinger-root/
-├── .env                    # Environment variables
-├── package.json            # Dependencies + scripts
-├── dist/                   # Frontend build output (Vite)
-│   ├── index.html
-│   └── assets/
-├── server/                 # Backend source
-│   ├── index.ts            # Express server entry
-│   ├── db/sheets.ts        # Google Sheets API
+project-root/
+├── server.js            ← Entry point (Express server + semua API)
+├── package.json         ← Dependencies
+├── dist/                ← Frontend build output (Vite)
+├── server/              ← Server source (TypeScript, untuk reference)
+│   ├── index.ts
+│   ├── db/sheets.ts
 │   ├── routes/
-│   │   ├── auth.ts         # Login, register, change password
-│   │   ├── users.ts        # CRUD users + import
-│   │   ├── subjects.ts     # CRUD subjects
-│   │   ├── exams.ts        # CRUD exams + scheduling
-│   │   └── attempts.ts     # Start/complete/expire attempts
-│   └── middleware/auth.ts   # JWT auth middleware
-└── src/                    # Frontend source (React + Vite)
+│   └── middleware/
+└── src/                 ← Frontend source (React)
 ```
+
+> **Catatan**: `server.js` adalah versi plain JavaScript yang dijalankan Hostinger. File di `server/` adalah source TypeScript untuk development.
 
 ---
 
@@ -209,14 +184,3 @@ hostinger-root/
 
 1. Push perubahan ke GitHub
 2. Di Hostinger → **Deploy ulang**
-3. Server otomatis rebuild dan restart
-
----
-
-## Catatan Penting
-
-1. **Jangan commit `.env` ke Git** — sudah di `.gitignore`
-2. **Backup Google Spreadsheet** — download ke Excel secara berkala
-3. **Google Sheets API limit** — 300 requests/menit (cukup untuk 900 siswa/hari)
-4. **JWT_SECRET harus unik** — jangan pakai placeholder
-5. **HTTPS** — pastikan Hostinger SSL aktif (biasanya otomatis)
