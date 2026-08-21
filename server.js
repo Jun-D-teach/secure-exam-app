@@ -47,7 +47,7 @@ var SA_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
 function normalizePemKey(raw) {
   if (!raw) return "";
   var s = raw;
-  // Remove surrounding quotes
+  // Remove surrounding quotes (single or double)
   if (s.length >= 2) {
     var fc = s.charCodeAt(0);
     var lc = s.charCodeAt(s.length - 1);
@@ -77,13 +77,103 @@ function normalizePemKey(raw) {
     s = out.join("");
     if (!changed) break;
   }
+  // Collapse multiple blank lines
   s = s.replace(/\n{3,}/g, "\n\n");
   return s.trim();
 }
 
-// Support GOOGLE_PRIVATE_KEY_B64 (base64-encoded) - most reliable!
+// Rebuild PEM with proper 64-char base64 line wrapping
+function fixPemLineWrapping(pem) {
+  var lines = pem.split("\n");
+  var header = "";
+  var footer = "";
+  var b64chars = [];
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i].trim();
+    if (l.indexOf("-----BEGIN") === 0) { header = l; continue; }
+    if (l.indexOf("-----END") === 0) { footer = l; continue; }
+    if (l) {
+      // Remove any whitespace from base64 content
+      for (var j = 0; j < l.length; j++) {
+        var ch = l.charCodeAt(j);
+        // Only keep base64 chars: A-Z a-z 0-9 + / =
+        if ((ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || (ch >= 48 && ch <= 57) || ch === 43 || ch === 47 || ch === 61) {
+          b64chars.push(l.charAt(j));
+        }
+      }
+    }
+  }
+  if (!header || !footer || b64chars.length === 0) return pem;
+  // Rebuild with 64-char lines
+  var b64 = b64chars.join("");
+  var result = [header];
+  for (var k = 0; k < b64.length; k += 64) {
+    result.push(b64.substring(k, k + 64));
+  }
+  result.push(footer);
+  return result.join("\n");
+}
+
+// Safely parse PEM key - tries multiple approaches
+function safeParsePemKey(pem) {
+  // Approach 1: Direct PEM
+  try {
+    var key = crypto.createPrivateKey({ key: pem, format: "pem" });
+    console.log("[UjianKita] Key parsed directly (type:", key.type, ", bits:", key.asymmetricKeyBits, ")");
+    return key;
+  } catch (e1) {
+    console.log("[UjianKita] Direct parse failed:", e1.message);
+  }
+  // Approach 2: Fix line wrapping then try again
+  try {
+    var fixed = fixPemLineWrapping(pem);
+    var key2 = crypto.createPrivateKey({ key: fixed, format: "pem" });
+    console.log("[UjianKita] Key parsed after line-wrap fix (type:", key2.type, ", bits:", key2.asymmetricKeyBits, ")");
+    return key2;
+  } catch (e2) {
+    console.log("[UjianKita] Line-wrap fix parse failed:", e2.message);
+  }
+  // Approach 3: Try as PKCS8 explicit
+  try {
+    var key3 = crypto.createPrivateKey({ key: pem, format: "pem", type: "pkcs8" });
+    console.log("[UjianKita] Key parsed as explicit PKCS8 (type:", key3.type, ", bits:", key3.asymmetricKeyBits, ")");
+    return key3;
+  } catch (e3) {
+    console.log("[UjianKita] PKCS8 explicit parse failed:", e3.message);
+  }
+  // All approaches failed
+  console.error("[UjianKita] ALL key parsing approaches failed!");
+  console.error("[UjianKita] TIP 1: Set GOOGLE_SERVICE_ACCOUNT_JSON env var with entire JSON key file");
+  console.error("[UjianKita] TIP 2: Set GOOGLE_PRIVATE_KEY_B64 env var with base64-encoded PEM key");
+  console.error("[UjianKita] TIP 3: Set NODE_OPTIONS=--openssl-legacy-provider");
+  return null;
+}
+
+// --- Load private key (multiple sources, most reliable first) ---
 var SA_KEY = "";
-if (process.env.GOOGLE_PRIVATE_KEY_B64) {
+var SA_KEY_OBJ = null;
+
+// Source 1: GOOGLE_SERVICE_ACCOUNT_JSON (entire JSON key file content) - MOST RELIABLE
+if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+  try {
+    var jsonContent = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    // Remove surrounding quotes if present
+    if (jsonContent.charCodeAt(0) === 34 && jsonContent.charCodeAt(jsonContent.length - 1) === 34) {
+      jsonContent = jsonContent.substring(1, jsonContent.length - 1);
+    }
+    // Unescape any escaped newlines in JSON string
+    jsonContent = jsonContent.replace(/\\n/g, "\n");
+    var saJson = JSON.parse(jsonContent);
+    SA_KEY = (saJson.private_key || "").trim();
+    if (!SA_EMAIL && saJson.client_email) SA_EMAIL = saJson.client_email;
+    console.log("[UjianKita] Private key loaded from GOOGLE_SERVICE_ACCOUNT_JSON");
+  } catch (e) {
+    console.error("[UjianKita] Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:", e.message);
+  }
+}
+
+// Source 2: GOOGLE_PRIVATE_KEY_B64 (base64-encoded PEM)
+if (!SA_KEY && process.env.GOOGLE_PRIVATE_KEY_B64) {
   try {
     SA_KEY = Buffer.from(process.env.GOOGLE_PRIVATE_KEY_B64, "base64").toString("utf-8").trim();
     console.log("[UjianKita] Private key loaded from GOOGLE_PRIVATE_KEY_B64 (" + SA_KEY.length + " chars)");
@@ -91,30 +181,35 @@ if (process.env.GOOGLE_PRIVATE_KEY_B64) {
     console.error("[UjianKita] Failed to decode GOOGLE_PRIVATE_KEY_B64:", e.message);
   }
 }
+
+// Source 3: GOOGLE_PRIVATE_KEY (raw PEM string in env var)
 if (!SA_KEY && process.env.GOOGLE_PRIVATE_KEY) {
   SA_KEY = normalizePemKey(process.env.GOOGLE_PRIVATE_KEY);
   console.log("[UjianKita] Private key loaded from GOOGLE_PRIVATE_KEY (" + SA_KEY.length + " chars)");
 }
 
-// Validate PEM format
+// Validate and parse the key
 if (SA_KEY) {
   var hasBegin = SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 || SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0;
   var hasEnd = SA_KEY.indexOf("-----END PRIVATE KEY-----") > -1 || SA_KEY.indexOf("-----END RSA PRIVATE KEY-----") > -1;
-  console.log("[UjianKita] Key validation:", { hasBegin: hasBegin, hasEnd: hasEnd, lines: SA_KEY.split("\n").length });
-  if (!hasBegin) console.error("[UjianKita] WARNING: Key missing BEGIN marker. First 60 chars:", SA_KEY.substring(0, 60));
-  if (!hasEnd) console.error("[UjianKita] WARNING: Key missing END marker. Last 60 chars:", SA_KEY.substring(SA_KEY.length - 60));
+  var lineCount = SA_KEY.split("\n").length;
+  console.log("[UjianKita] Key validation:", { hasBegin: hasBegin, hasEnd: hasEnd, lines: lineCount, keyLen: SA_KEY.length });
+  if (!hasBegin) console.error("[UjianKita] WARNING: Key missing BEGIN marker. First 80 chars:", SA_KEY.substring(0, 80));
+  if (!hasEnd) console.error("[UjianKita] WARNING: Key missing END marker. Last 80 chars:", SA_KEY.substring(SA_KEY.length - 80));
 
-  // Test if crypto can parse the key
-  try {
-    var testKey = crypto.createPrivateKey({ key: SA_KEY, format: "pem" });
-    console.log("[UjianKita] Key crypto validation: OK (type:", testKey.type, ", bits:", testKey.asymmetricKeyBits, ")");
-  } catch (e) {
-    console.error("[UjianKita] Key crypto validation FAILED:", e.message);
-    console.error("[UjianKita] This is the root cause of DECODER errors!");
-    console.error("[UjianKita] TIP: Set GOOGLE_PRIVATE_KEY_B64 env var with base64-encoded key");
+  SA_KEY_OBJ = safeParsePemKey(SA_KEY);
+  if (!SA_KEY_OBJ) {
+    // Try with fixed line wrapping
+    var fixedKey = fixPemLineWrapping(SA_KEY);
+    if (fixedKey !== SA_KEY) {
+      console.log("[UjianKita] Trying with fixed line wrapping...");
+      SA_KEY_OBJ = safeParsePemKey(fixedKey);
+      if (SA_KEY_OBJ) SA_KEY = fixedKey;
+    }
   }
 } else {
-  console.error("[UjianKita] No private key found! Set GOOGLE_PRIVATE_KEY or GOOGLE_PRIVATE_KEY_B64");
+  console.error("[UjianKita] No private key found!");
+  console.error("[UjianKita] Set one of: GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_PRIVATE_KEY_B64, or GOOGLE_PRIVATE_KEY");
 }
 
 console.log("[UjianKita] ENV check:", {
@@ -134,6 +229,7 @@ function base64url(str) {
 }
 
 async function createSignedJwt() {
+  if (!SA_KEY_OBJ) throw new Error("Private key not available — check GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_PRIVATE_KEY env vars");
   var now = Math.floor(Date.now() / 1000);
   var header = JSON.stringify({ alg: "RS256", typ: "JWT" });
   var claim = JSON.stringify({
@@ -147,7 +243,7 @@ async function createSignedJwt() {
   var sign = crypto.createSign("RSA-SHA256");
   sign.update(signInput);
   sign.end();
-  var signature = sign.sign(SA_KEY, "base64url");
+  var signature = sign.sign(SA_KEY_OBJ, "base64url");
   return signInput + "." + signature;
 }
 
@@ -340,20 +436,26 @@ app.get("/api/health", function (_req, res) {
 
 // --- DEBUG: Google Sheets diagnostic ---
 app.get("/api/debug/sheets", async function (_req, res) {
-  var result = { steps: [], node: process.version };
+  var result = { steps: [], node: process.version, ts: new Date().toISOString() };
   try {
     result.steps.push({ name: "env_check", ok: true, data: {
       hasSpreadsheetId: !!SPREADSHEET_ID, hasServiceAccountEmail: !!SA_EMAIL,
-      hasPrivateKey: !!SA_KEY, keyLength: SA_KEY.length,
-      keyFormat: SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 ? "PKCS8" : SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0 ? "PKCS1" : "UNKNOWN",
+      hasPrivateKey: !!SA_KEY, keyLength: SA_KEY ? SA_KEY.length : 0,
+      keyFormat: SA_KEY ? (SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 ? "PKCS8" : SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0 ? "PKCS1" : "UNKNOWN") : "NONE",
+      keySource: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "JSON" : process.env.GOOGLE_PRIVATE_KEY_B64 ? "B64" : process.env.GOOGLE_PRIVATE_KEY ? "RAW" : "NONE",
+      hasKeyObject: !!SA_KEY_OBJ,
     }});
-    // Test key parsing
-    try {
-      var testKey = crypto.createPrivateKey({ key: SA_KEY, format: "pem" });
-      result.steps.push({ name: "key_parse", ok: true, data: { type: testKey.type, bits: testKey.asymmetricKeyBits } });
-    } catch (e) {
-      result.steps.push({ name: "key_parse", ok: false, error: e.message });
-      return res.json(result);
+    // Test key parsing using pre-parsed KeyObject
+    if (SA_KEY_OBJ) {
+      result.steps.push({ name: "key_parse", ok: true, data: { type: SA_KEY_OBJ.type, bits: SA_KEY_OBJ.asymmetricKeyBits } });
+    } else {
+      try {
+        var testKey = crypto.createPrivateKey({ key: SA_KEY, format: "pem" });
+        result.steps.push({ name: "key_parse", ok: true, data: { type: testKey.type, bits: testKey.asymmetricKeyBits } });
+      } catch (e) {
+        result.steps.push({ name: "key_parse", ok: false, error: e.message });
+        return res.json(result);
+      }
     }
     // Test JWT signing
     try {

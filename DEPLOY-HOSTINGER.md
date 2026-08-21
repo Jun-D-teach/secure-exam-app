@@ -105,13 +105,18 @@ server.js
 | `JWT_SECRET` | *(generate baru — lihat di bawah)* |
 | `GOOGLE_SHEET_ID` | `1jHpzXrNdjkdIW4QjLaCl6S8d1-obvz8lztvhiqJ7pYQ` |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | `exam-secure-app@polar-automata-468801-u9.iam.gserviceaccount.com` |
-| `GOOGLE_PRIVATE_KEY` | *(paste dari .env kamu)* |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | *(paste isi JSON key file — PALING RELIABLE!)* |
 | `ADMIN_RESET_KEY` | *(buat secret key untuk reset admin)* |
 
 **Generate JWT_SECRET:**
 ```bash
 node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```
+
+**Google Service Account JSON (PALING RELIABLE):**
+Buka file JSON yang di-download dari Google Cloud, copy SELURUH isi file, paste sebagai value `GOOGLE_SERVICE_ACCOUNT_JSON`. Ini menghindari masalah encoding newline/escaping.
+
+> ⚠️ Jika menggunakan `GOOGLE_PRIVATE_KEY` langsung (bukan JSON), pastikan format PEM benar dengan `\n` sebagai baris baru.
 
 ### 3.5 Deploy
 Klik **Deploy ulang** / **Redeploy**
@@ -156,6 +161,14 @@ Express server belum start. Cek:
 1. Service account di-share ke spreadsheet (Editor access)
 2. Spreadsheet ID benar
 3. Private Key lengkap dan format benar (ada `\n` sebagai baris baru)
+
+### Error `DECODER routines::unsupported`
+Ini error OpenSSL 3.x di Hostinger. Fix:
+1. **Gunakan `GOOGLE_SERVICE_ACCOUNT_JSON`** — paste seluruh isi file JSON key (paling reliable)
+2. Atau gunakan `GOOGLE_PRIVATE_KEY_B64` — base64-encode PEM key dulu
+3. Atau tambah env var `NODE_OPTIONS=--openssl-legacy-provider`
+
+Cek debug: `https://domain-kamu.com/api/debug/sheets`
 
 ### MIME type error "text/plain" untuk JS files
 Artinya server tidak jalan — static files dilayani oleh web server default. Pastikan `node server.js` berjalan.
