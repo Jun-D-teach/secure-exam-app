@@ -436,7 +436,7 @@ async function readSheet(sheetName) {
   var headers = rows[0];
   return rows.slice(1).map(function (row) {
     var obj = {};
-    headers.forEach(function (h, i) { obj[h] = row[i] || ""; });
+    headers.forEach(function (h, i) { obj[h] = (row[i] || "").trim(); });
     return obj;
   });
 }
@@ -479,8 +479,10 @@ async function deleteRow(sheetName, id) {
   var data = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
   var rows = data.values || [];
   var idIdx = headers.indexOf("id");
+  var trimmedId = (id || "").trim();
   for (var i = 1; i < rows.length; i++) {
-    if (rows[i][idIdx] === id) {
+    var rowId = (rows[i][idIdx] || "").trim();
+    if (rowId === trimmedId) {
       // Get sheet ID from metadata
       var meta = await sheetsApi("GET", "");
       var sheet = (meta.sheets || []).find(function (s) { return s.properties && s.properties.title === sheetName; });
@@ -765,7 +767,8 @@ app.delete("/api/users/:id", authenticate, requireRole(["admin"]), async functio
     var user = await findByField(SHEETS.USERS, "id", req.params.id);
     if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
     if (user.role === "admin") return res.status(400).json({ error: "Akun admin tidak bisa dihapus" });
-    await deleteRow(SHEETS.USERS, req.params.id);
+    var deleted = await deleteRow(SHEETS.USERS, req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Akun tidak ditemukan di spreadsheet" });
     res.json({ message: "Akun berhasil dihapus" });
   } catch (e) { res.status(500).json({ error: "Gagal menghapus akun: " + e.message }); }
 });
@@ -820,7 +823,8 @@ app.delete("/api/subjects/:id", authenticate, requireRole(["admin"]), async func
   try {
     var subjects = await readSheet(SHEETS.SUBJECTS);
     if (!subjects.find(function (s) { return s.id === req.params.id; })) return res.status(404).json({ error: "Mapel tidak ditemukan" });
-    await deleteRow(SHEETS.SUBJECTS, req.params.id);
+    var deleted = await deleteRow(SHEETS.SUBJECTS, req.params.id);
+    if (!deleted) return res.status(404).json({ error: "Mapel tidak ditemukan di spreadsheet" });
     res.json({ message: "Mapel berhasil dihapus" });
   } catch (e) { res.status(500).json({ error: "Gagal menghapus mapel: " + e.message }); }
 });
