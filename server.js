@@ -155,23 +155,101 @@ var SA_KEY_OBJ = null;
 
 // Source 1: GOOGLE_SERVICE_ACCOUNT_JSON (entire JSON key file content) - MOST RELIABLE
 if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-  try {
-    var jsonContent = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-    // Remove surrounding quotes if present
-    if (jsonContent.charCodeAt(0) === 34 && jsonContent.charCodeAt(jsonContent.length - 1) === 34) {
-      jsonContent = jsonContent.substring(1, jsonContent.length - 1);
+  var jsonRaw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  console.log("[UjianKita] JSON env raw length:", jsonRaw.length, "first 100:", jsonRaw.substring(0, 100));
+  // Log first 30 char codes for debugging
+  var charCodes = [];
+  for (var ci = 0; ci < Math.min(30, jsonRaw.length); ci++) {
+    charCodes.push(jsonRaw.charCodeAt(ci));
+  }
+  console.log("[UjianKita] JSON env first 30 charCodes:", charCodes.join(", "));
+  // Try multiple unescape strategies
+  var saJson = null;
+  var jsonStrategies = [
+    // Strategy 1: direct parse
+    function (s) { return JSON.parse(s); },
+    // Strategy 2: remove surrounding quotes, then parse
+    function (s) {
+      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
+      return JSON.parse(s);
+    },
+    // Strategy 3: unescape double-escaped quotes first
+    function (s) {
+      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
+      s = s.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      return JSON.parse(s);
+    },
+    // Strategy 4: Hostinger-style double escaping
+    function (s) {
+      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
+      s = s.replace(/\\"/g, '"');
+      s = s.replace(/\\n/g, '\n');
+      s = s.replace(/\\\\/g, '\\');
+      return JSON.parse(s);
+    },
+    // Strategy 5: Aggressive unescape — handle ALL possible Hostinger escaping
+    function (s) {
+      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
+      // Unescape \" -> " first (most common Hostinger issue)
+      s = s.replace(/\\"/g, '"');
+      // Then unescape \n -> newline, \r -> carriage return, \\ -> backslash
+      s = s.replace(/\\n/g, '\n');
+      s = s.replace(/\\r/g, '\r');
+      s = s.replace(/\\\\/g, '\\');
+      // Also handle tab escaping
+      s = s.replace(/\\t/g, '\t');
+      return JSON.parse(s);
+    },
+  ];
+  for (var si = 0; si < jsonStrategies.length; si++) {
+    try {
+      saJson = jsonStrategies[si](jsonRaw);
+      console.log("[UjianKita] JSON parsed OK with strategy", si + 1, ". Keys:", Object.keys(saJson).join(", "));
+      break;
+    } catch (je) {
+      console.log("[UjianKita] JSON strategy", si + 1, "failed:", je.message);
     }
-    // Parse JSON FIRST — do NOT replace \n before parsing!
-    var saJson = JSON.parse(jsonContent);
-    console.log("[UjianKita] JSON parsed OK. Keys:", Object.keys(saJson).join(", "));
-    // Extract private_key — it may have literal \n that need converting to real newlines
+  }
+  if (saJson) {
     var rawKey = saJson.private_key || "";
     SA_KEY = normalizePemKey(rawKey);
     if (!SA_EMAIL && saJson.client_email) SA_EMAIL = saJson.client_email;
-    console.log("[UjianKita] Private key loaded from GOOGLE_SERVICE_ACCOUNT_JSON (" + SA_KEY.length + " chars)");
-  } catch (e) {
-    console.error("[UjianKita] Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:", e.message);
-    console.error("[UjianKita] TIP: Make sure you paste the ENTIRE JSON file content, including curly braces");
+    console.log("[UjianKita] Key from JSON (" + SA_KEY.length + " chars)");
+  } else {
+    // ALL JSON strategies failed — extract private_key via REGEX
+    console.error("[UjianKita] JSON parse failed. Extracting private_key via regex...");
+    // Match: "private_key": "-----BEGIN ..." (with various escaping)
+    var pemRegex = /(?:"private_key"\s*:\s*")(-----BEGIN[^"]*"[\s\S]*?-----END[^\"]*"[^"]*?")/;
+    var pemMatch = jsonRaw.match(pemRegex);
+    if (pemMatch) {
+      SA_KEY = normalizePemKey(pemMatch[1]);
+      console.log("[UjianKita] Regex extracted PEM key (" + SA_KEY.length + " chars)");
+      // Also try to extract client_email
+      var emailRegex = /(?:"client_email"\s*:\s*")([^"]+)"/;
+      var emailMatch = jsonRaw.match(emailRegex);
+      if (!SA_EMAIL && emailMatch) {
+        SA_EMAIL = emailMatch[1];
+        console.log("[UjianKita] Regex extracted client_email:", SA_EMAIL);
+      }
+    } else {
+      // Try broader regex: find anything between BEGIN and END markers
+      var broadRegex = /((?:-----BEGIN[^-]*-----)[\s\S]*?(?:-----END[^-]*-----))/;
+      var broadMatch = jsonRaw.match(broadRegex);
+      if (broadMatch) {
+        SA_KEY = normalizePemKey(broadMatch[1]);
+        console.log("[UjianKita] Broad regex extracted PEM key (" + SA_KEY.length + " chars)");
+        // Also try to extract client_email
+        var emailRegex2 = /(?:"client_email"\s*:\s*")([^"]+)"/;
+        var emailMatch2 = jsonRaw.match(emailRegex2);
+        if (!SA_EMAIL && emailMatch2) {
+          SA_EMAIL = emailMatch2[1];
+          console.log("[UjianKita] Regex extracted client_email:", SA_EMAIL);
+        }
+      } else {
+        console.error("[UjianKita] Could not extract PEM key from JSON env var");
+        console.error("[UjianKita] Raw env first 200 chars:", jsonRaw.substring(0, 200));
+      }
+    }
   }
 }
 
@@ -454,6 +532,17 @@ app.get("/api/debug/sheets", async function (_req, res) {
       };
     } else {
       keyInfo = { keyLength: 0, keyFormat: "NONE", keySource: "NONE", hasKeyObject: false };
+    }
+    // Show raw JSON env var char codes for debugging
+    if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+      var rawJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+      var codes = [];
+      for (var ci = 0; ci < Math.min(50, rawJson.length); ci++) {
+        codes.push(rawJson.charCodeAt(ci));
+      }
+      keyInfo.jsonEnvRawLength = rawJson.length;
+      keyInfo.jsonEnvFirst50CharCodes = codes.join(", ");
+      keyInfo.jsonEnvFirst50Chars = rawJson.substring(0, 50);
     }
     result.steps.push({ name: "env_check", ok: true, data: Object.assign({
       hasSpreadsheetId: !!SPREADSHEET_ID, hasServiceAccountEmail: !!SA_EMAIL,
