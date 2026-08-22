@@ -161,14 +161,17 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     if (jsonContent.charCodeAt(0) === 34 && jsonContent.charCodeAt(jsonContent.length - 1) === 34) {
       jsonContent = jsonContent.substring(1, jsonContent.length - 1);
     }
-    // Unescape any escaped newlines in JSON string
-    jsonContent = jsonContent.replace(/\\n/g, "\n");
+    // Parse JSON FIRST — do NOT replace \n before parsing!
     var saJson = JSON.parse(jsonContent);
-    SA_KEY = (saJson.private_key || "").trim();
+    console.log("[UjianKita] JSON parsed OK. Keys:", Object.keys(saJson).join(", "));
+    // Extract private_key — it may have literal \n that need converting to real newlines
+    var rawKey = saJson.private_key || "";
+    SA_KEY = normalizePemKey(rawKey);
     if (!SA_EMAIL && saJson.client_email) SA_EMAIL = saJson.client_email;
-    console.log("[UjianKita] Private key loaded from GOOGLE_SERVICE_ACCOUNT_JSON");
+    console.log("[UjianKita] Private key loaded from GOOGLE_SERVICE_ACCOUNT_JSON (" + SA_KEY.length + " chars)");
   } catch (e) {
     console.error("[UjianKita] Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON:", e.message);
+    console.error("[UjianKita] TIP: Make sure you paste the ENTIRE JSON file content, including curly braces");
   }
 }
 
@@ -438,13 +441,24 @@ app.get("/api/health", function (_req, res) {
 app.get("/api/debug/sheets", async function (_req, res) {
   var result = { steps: [], node: process.version, ts: new Date().toISOString() };
   try {
-    result.steps.push({ name: "env_check", ok: true, data: {
+    var keyInfo = {};
+    if (SA_KEY) {
+      keyInfo = {
+        keyLength: SA_KEY.length,
+        keyFormat: SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 ? "PKCS8" : SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0 ? "PKCS1" : "UNKNOWN",
+        keySource: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "JSON" : process.env.GOOGLE_PRIVATE_KEY_B64 ? "B64" : process.env.GOOGLE_PRIVATE_KEY ? "RAW" : "NONE",
+        hasKeyObject: !!SA_KEY_OBJ,
+        firstChars: SA_KEY.substring(0, 30),
+        lastChars: SA_KEY.substring(SA_KEY.length - 30),
+        lineCount: SA_KEY.split("\n").length,
+      };
+    } else {
+      keyInfo = { keyLength: 0, keyFormat: "NONE", keySource: "NONE", hasKeyObject: false };
+    }
+    result.steps.push({ name: "env_check", ok: true, data: Object.assign({
       hasSpreadsheetId: !!SPREADSHEET_ID, hasServiceAccountEmail: !!SA_EMAIL,
-      hasPrivateKey: !!SA_KEY, keyLength: SA_KEY ? SA_KEY.length : 0,
-      keyFormat: SA_KEY ? (SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 ? "PKCS8" : SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0 ? "PKCS1" : "UNKNOWN") : "NONE",
-      keySource: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "JSON" : process.env.GOOGLE_PRIVATE_KEY_B64 ? "B64" : process.env.GOOGLE_PRIVATE_KEY ? "RAW" : "NONE",
-      hasKeyObject: !!SA_KEY_OBJ,
-    }});
+      hasPrivateKey: !!SA_KEY,
+    }, keyInfo) });
     // Test key parsing using pre-parsed KeyObject
     if (SA_KEY_OBJ) {
       result.steps.push({ name: "key_parse", ok: true, data: { type: SA_KEY_OBJ.type, bits: SA_KEY_OBJ.asymmetricKeyBits } });
