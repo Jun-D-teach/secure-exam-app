@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 interface User {
   id: string;
@@ -22,9 +22,16 @@ export function useAuth() {
     try {
       const userData = await api.getCurrentUser();
       setUser(userData);
-    } catch {
-      api.logout();
-      setUser(null);
+    } catch (err) {
+      // Only log out on 401 (invalid/expired token).
+      // On 500 (transient Google Sheets error), keep the user logged in
+      // and retry on next navigation.
+      if (err instanceof ApiError && err.status === 401) {
+        api.logout();
+        setUser(null);
+      }
+      // For other errors (500, network), don't clear the session.
+      // The token is still valid; the backend just had a temporary issue.
     } finally {
       setIsLoading(false);
     }

@@ -1,5 +1,14 @@
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export interface Exam {
   _id: string;
   id: string;
@@ -106,8 +115,9 @@ class ApiClient {
 
     // Detect HTML response (backend not running → web server returns 404 page)
     if (contentType.includes("text/html") || text.trimStart().startsWith("<!DOCTYPE") || text.trimStart().startsWith("<html")) {
-      throw new Error(
-        "Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif."
+      throw new ApiError(
+        "Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif.",
+        502,
       );
     }
 
@@ -115,11 +125,11 @@ class ApiClient {
     try {
       data = JSON.parse(text);
     } catch {
-      throw new Error("Response server tidak valid. Silakan coba lagi.");
+      throw new ApiError("Response server tidak valid. Silakan coba lagi.", response.status);
     }
 
     if (!response.ok) {
-      throw new Error(data.error || "Terjadi kesalahan");
+      throw new ApiError(data.error || "Terjadi kesalahan", response.status);
     }
 
     return data as T;
