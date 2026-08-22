@@ -153,102 +153,103 @@ function safeParsePemKey(pem) {
 var SA_KEY = "";
 var SA_KEY_OBJ = null;
 
-// Source 1: GOOGLE_SERVICE_ACCOUNT_JSON (entire JSON key file content) - MOST RELIABLE
+// Source 1: GOOGLE_SERVICE_ACCOUNT_JSON (entire JSON key file content)
+// Common issue: user pastes JSON WITHOUT outer {} braces
 if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
   var jsonRaw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   console.log("[UjianKita] JSON env raw length:", jsonRaw.length, "first 100:", jsonRaw.substring(0, 100));
-  // Log first 30 char codes for debugging
   var charCodes = [];
   for (var ci = 0; ci < Math.min(30, jsonRaw.length); ci++) {
     charCodes.push(jsonRaw.charCodeAt(ci));
   }
   console.log("[UjianKita] JSON env first 30 charCodes:", charCodes.join(", "));
-  // Try multiple unescape strategies
+
+  // Smart pre-processing: detect and fix common Hostinger issues
+  var processed = jsonRaw.trim();
+
+  // Remove surrounding quotes if Hostinger double-quoted the entire value
+  // BUT only if the content INSIDE the quotes starts with { (valid JSON object)
+  if (processed.length >= 2 && processed.charCodeAt(0) === 34 && processed.charCodeAt(processed.length - 1) === 34) {
+    var inner = processed.substring(1, processed.length - 1).trim();
+    if (inner.charAt(0) === '{') {
+      processed = inner;
+      console.log("[UjianKita] Removed surrounding quotes (inner starts with {)");
+    }
+  }
+
+  // If content doesn't start with {, user pasted JSON without braces — add them
+  if (processed.charAt(0) !== '{') {
+    processed = '{' + processed + '}';
+    console.log("[UjianKita] Added missing outer {} braces");
+  }
+
+  // Try parsing with multiple unescape strategies
   var saJson = null;
   var jsonStrategies = [
-    // Strategy 1: direct parse
+    // Strategy 1: parse as-is (normal case)
     function (s) { return JSON.parse(s); },
-    // Strategy 2: remove surrounding quotes, then parse
+    // Strategy 2: unescape Hostinger double-escaped quotes
+    function (s) { return JSON.parse(s.replace(/\\"/g, '"')); },
+    // Strategy 3: unescape quotes + newlines
     function (s) {
-      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
-      return JSON.parse(s);
-    },
-    // Strategy 3: unescape double-escaped quotes first
-    function (s) {
-      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
-      s = s.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-      return JSON.parse(s);
-    },
-    // Strategy 4: Hostinger-style double escaping
-    function (s) {
-      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
       s = s.replace(/\\"/g, '"');
-      s = s.replace(/\\n/g, '\n');
-      s = s.replace(/\\\\/g, '\\');
-      return JSON.parse(s);
-    },
-    // Strategy 5: Aggressive unescape — handle ALL possible Hostinger escaping
-    function (s) {
-      if (s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) s = s.substring(1, s.length - 1);
-      // Unescape \" -> " first (most common Hostinger issue)
-      s = s.replace(/\\"/g, '"');
-      // Then unescape \n -> newline, \r -> carriage return, \\ -> backslash
       s = s.replace(/\\n/g, '\n');
       s = s.replace(/\\r/g, '\r');
-      s = s.replace(/\\\\/g, '\\');
-      // Also handle tab escaping
+      return JSON.parse(s);
+    },
+    // Strategy 4: aggressive — unescape everything
+    function (s) {
+      s = s.replace(/\\"/g, '"');
+      s = s.replace(/\\n/g, '\n');
+      s = s.replace(/\\r/g, '\r');
       s = s.replace(/\\t/g, '\t');
+      s = s.replace(/\\\\/g, '\\');
       return JSON.parse(s);
     },
   ];
+
   for (var si = 0; si < jsonStrategies.length; si++) {
     try {
-      saJson = jsonStrategies[si](jsonRaw);
+      saJson = jsonStrategies[si](processed);
       console.log("[UjianKita] JSON parsed OK with strategy", si + 1, ". Keys:", Object.keys(saJson).join(", "));
       break;
     } catch (je) {
       console.log("[UjianKita] JSON strategy", si + 1, "failed:", je.message);
     }
   }
+
   if (saJson) {
     var rawKey = saJson.private_key || "";
     SA_KEY = normalizePemKey(rawKey);
     if (!SA_EMAIL && saJson.client_email) SA_EMAIL = saJson.client_email;
     console.log("[UjianKita] Key from JSON (" + SA_KEY.length + " chars)");
   } else {
-    // ALL JSON strategies failed — extract private_key via REGEX
+    // ALL JSON strategies failed — extract private_key via REGEX (bypass JSON entirely)
     console.error("[UjianKita] JSON parse failed. Extracting private_key via regex...");
-    // Match: "private_key": "-----BEGIN ..." (with various escaping)
-    var pemRegex = /(?:"private_key"\s*:\s*")(-----BEGIN[^"]*"[\s\S]*?-----END[^\"]*"[^"]*?")/;
+    // Try specific regex first
+    var pemRegex = /"private_key"\s*:\s*"((?:-----BEGIN[^"]*?-----)[\s\S]*?(?:-----END[^"]*?-----)[^"]*?)"/;
     var pemMatch = jsonRaw.match(pemRegex);
     if (pemMatch) {
       SA_KEY = normalizePemKey(pemMatch[1]);
       console.log("[UjianKita] Regex extracted PEM key (" + SA_KEY.length + " chars)");
-      // Also try to extract client_email
-      var emailRegex = /(?:"client_email"\s*:\s*")([^"]+)"/;
-      var emailMatch = jsonRaw.match(emailRegex);
-      if (!SA_EMAIL && emailMatch) {
-        SA_EMAIL = emailMatch[1];
-        console.log("[UjianKita] Regex extracted client_email:", SA_EMAIL);
-      }
     } else {
-      // Try broader regex: find anything between BEGIN and END markers
+      // Broader regex: find anything between BEGIN and END markers
       var broadRegex = /((?:-----BEGIN[^-]*-----)[\s\S]*?(?:-----END[^-]*-----))/;
       var broadMatch = jsonRaw.match(broadRegex);
       if (broadMatch) {
         SA_KEY = normalizePemKey(broadMatch[1]);
         console.log("[UjianKita] Broad regex extracted PEM key (" + SA_KEY.length + " chars)");
-        // Also try to extract client_email
-        var emailRegex2 = /(?:"client_email"\s*:\s*")([^"]+)"/;
-        var emailMatch2 = jsonRaw.match(emailRegex2);
-        if (!SA_EMAIL && emailMatch2) {
-          SA_EMAIL = emailMatch2[1];
-          console.log("[UjianKita] Regex extracted client_email:", SA_EMAIL);
-        }
       } else {
         console.error("[UjianKita] Could not extract PEM key from JSON env var");
         console.error("[UjianKita] Raw env first 200 chars:", jsonRaw.substring(0, 200));
       }
+    }
+    // Also try to extract client_email via regex
+    var emailRegex = /"client_email"\s*:\s*"([^"]+)"/;
+    var emailMatch = jsonRaw.match(emailRegex);
+    if (!SA_EMAIL && emailMatch) {
+      SA_EMAIL = emailMatch[1];
+      console.log("[UjianKita] Regex extracted client_email:", SA_EMAIL);
     }
   }
 }
