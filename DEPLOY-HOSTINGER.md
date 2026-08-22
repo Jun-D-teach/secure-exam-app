@@ -162,11 +162,19 @@ Express server belum start. Cek:
 2. Spreadsheet ID benar
 3. Private Key lengkap dan format benar (ada `\n` sebagai baris baru)
 
-### Error `DECODER routines::unsupported`
-Ini error OpenSSL 3.x di Hostinger. Fix:
-1. **Gunakan `GOOGLE_SERVICE_ACCOUNT_JSON`** — paste seluruh isi file JSON key (paling reliable)
-2. Atau gunakan `GOOGLE_PRIVATE_KEY_B64` — base64-encode PEM key dulu
-3. Atau tambah env var `NODE_OPTIONS=--openssl-legacy-provider`
+### Error `DECODER routines::unsupported` (OpenSSL 3.x)
+
+**Fix Paling Reliable — tambah env var ini di Hostinger:**
+
+| Variable | Value |
+|----------|-------|
+| `NODE_OPTIONS` | `--openssl-legacy-provider` |
+
+Ini memaksa Node.js pakai OpenSSL legacy provider yang kompatibel dengan semua format key.
+
+Alternatif:
+1. Gunakan `GOOGLE_SERVICE_ACCOUNT_JSON` — paste seluruh isi file JSON key
+2. Gunakan `GOOGLE_PRIVATE_KEY_B64` — base64-encode PEM key dulu
 
 Cek debug: `https://domain-kamu.com/api/debug/sheets`
 

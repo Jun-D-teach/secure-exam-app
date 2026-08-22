@@ -141,11 +141,27 @@ function safeParsePemKey(pem) {
   } catch (e3) {
     console.log("[UjianKita] PKCS8 explicit parse failed:", e3.message);
   }
+  // Approach 4: Convert PEM to DER buffer, then parse as DER (bypasses PEM decoder issues)
+  try {
+    var lines = pem.replace(/-----[^-]+-----/g, '').trim();
+    var derBuffer = Buffer.from(lines, 'base64');
+    var key4 = crypto.createPrivateKey({ key: derBuffer, format: 'der', type: 'pkcs8' });
+    console.log("[UjianKita] Key parsed from DER buffer (type:", key4.type, ", bits:", key4.asymmetricKeyBits, ")");
+    return key4;
+  } catch (e4) {
+    console.log("[UjianKita] DER buffer parse failed:", e4.message);
+  }
+  // Approach 5: Try as PKCS1 (older RSA format)
+  try {
+    var key5 = crypto.createPrivateKey({ key: pem, format: 'pem', type: 'pkcs1' });
+    console.log("[UjianKita] Key parsed as PKCS1 (type:", key5.type, ", bits:", key5.asymmetricKeyBits, ")");
+    return key5;
+  } catch (e5) {
+    console.log("[UjianKita] PKCS1 parse failed:", e5.message);
+  }
   // All approaches failed
   console.error("[UjianKita] ALL key parsing approaches failed!");
-  console.error("[UjianKita] TIP 1: Set GOOGLE_SERVICE_ACCOUNT_JSON env var with entire JSON key file");
-  console.error("[UjianKita] TIP 2: Set GOOGLE_PRIVATE_KEY_B64 env var with base64-encoded PEM key");
-  console.error("[UjianKita] TIP 3: Set NODE_OPTIONS=--openssl-legacy-provider");
+  console.error("[UjianKita] Add this env var in Hostinger: NODE_OPTIONS = --openssl-legacy-provider");
   return null;
 }
 
@@ -292,6 +308,11 @@ if (SA_KEY) {
 } else {
   console.error("[UjianKita] No private key found!");
   console.error("[UjianKita] Set one of: GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_PRIVATE_KEY_B64, or GOOGLE_PRIVATE_KEY");
+}
+
+// Check NODE_OPTIONS for OpenSSL compatibility
+if (!process.env.NODE_OPTIONS || process.env.NODE_OPTIONS.indexOf('openssl-legacy-provider') === -1) {
+  console.log("[UjianKita] TIP: Add env var NODE_OPTIONS = --openssl-legacy-provider for OpenSSL 3.x compatibility");
 }
 
 console.log("[UjianKita] ENV check:", {
