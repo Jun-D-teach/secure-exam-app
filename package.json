@@ -2,11 +2,14 @@
   "name": "ujiankita",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "postinstall": "npx vite build",
-    "start": "node server.js",
+    "start": "NODE_OPTIONS='--openssl-legacy-provider' node server.js",
     "preview": "vite preview"
   },
   "dependencies": {
