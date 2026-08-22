@@ -116,7 +116,8 @@ function AccountsSection() {
     event.preventDefault();
     setIsSubmitting(true);
     setError(null);
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget as HTMLFormElement;
+    const formData = new FormData(form);
     try {
       await api.createUser({
         name: String(formData.get("name") || ""),
@@ -125,7 +126,7 @@ function AccountsSection() {
         role: String(formData.get("role") || "student") as "student" | "teacher",
       });
       toast.success("Akun berhasil dibuat");
-      event.currentTarget.reset();
+      form.reset();
       loadUsers();
     } catch (err) {
       console.error("Create user error:", err);
@@ -318,14 +319,15 @@ function SubjectsSection() {
     event.preventDefault();
     setIsSubmitting(true);
     setError(null);
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget as HTMLFormElement;
+    const formData = new FormData(form);
     try {
       await api.createSubject({
         name: String(formData.get("name") || ""),
         description: String(formData.get("description") || "") || undefined,
       });
       toast.success("Mapel ditambahkan");
-      event.currentTarget.reset();
+      form.reset();
       loadSubjects();
     } catch (err) {
       console.error("Create subject error:", err);
