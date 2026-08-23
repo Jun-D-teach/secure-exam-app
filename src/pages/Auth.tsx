@@ -3,7 +3,7 @@ import { KeyRound, Loader2, Lock, RotateCcw, ShieldCheck, UserRound } from "luci
 import { Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -62,9 +62,12 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
           setHasAdmin(data.hasAdmin);
         }
       })
-      .catch(() => {
-        // Backend completely unreachable
-        setError("Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif.");
+      .catch((err) => {
+        if (err instanceof ApiError) {
+          setError(err.message);
+        } else {
+          setError("Server backend belum berjalan. Hubungi admin untuk memastikan server API aktif.");
+        }
         setHasAdmin(null);
       });
   }, []);

@@ -156,7 +156,14 @@ class ApiClient {
   }
 
   async hasAdmin() {
-    return this.request<{ hasAdmin: boolean; error?: string }>("/api/auth/has-admin");
+    try {
+      return await this.request<{ hasAdmin: boolean; error?: string }>("/api/auth/has-admin");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 500) {
+        return { hasAdmin: null as any, error: err.message };
+      }
+      throw err;
+    }
   }
 
   async getCurrentUser() {
