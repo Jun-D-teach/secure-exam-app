@@ -1,811 +1,590 @@
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
 import {
-  AlertTriangle,
+  BarChart3,
   BookOpen,
-  CalendarClock,
-  CheckCircle2,
+  Calendar,
+  ChevronDown,
+  FileText,
   GraduationCap,
-  KeyRound,
-  Loader2,
-  LogOut,
-  ShieldCheck,
+  LayoutDashboard,
+  Megaphone,
+  MessageSquare,
+  Newspaper,
+  Plus,
+  Settings,
+  Tags,
   Trash2,
-  Upload,
-  UserCog,
-  UserPlus,
+  TrendingUp,
   Users,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
-import { toast } from "sonner";
-import { api } from "@/lib/api";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
-import { EditProfileDialog } from "@/components/EditProfileDialog";
-import { ImportUsersDialog } from "@/components/ImportUsersDialog";
+import { api } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
-import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
-type ExamData = {
-  id: string;
-  title: string;
-  subject_id: string;
-  description: string;
-  google_form_url: string;
-  durationMinutes: number;
-  isActive: boolean;
-  startsAt?: number;
-  endsAt?: number;
-  created_by: string;
-  created_at: string;
-  subjectName: string | null;
-  teacherName: string | null;
-};
-
-type UserData = {
-  id: string;
-  name: string;
-  username: string;
-  role: string;
-  created_at: string;
-};
-
-type SubjectData = {
-  id: string;
-  name: string;
-  description: string;
-};
-
-// ---------------------------------------------------------------------------
-// Accounts section
-// ---------------------------------------------------------------------------
-
-function AccountsSection() {
-  const [users, setUsers] = useState<UserData[] | undefined>(undefined);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showImport, setShowImport] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-
-  const loadUsers = useCallback(async () => {
-    try {
-      const data = await api.listUsers();
-      setUsers(data);
-    } catch (err) {
-      console.error("Load users error:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
-
-  const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-    const form = event.currentTarget as HTMLFormElement;
-    const formData = new FormData(form);
-    try {
-      await api.createUser({
-        name: String(formData.get("name") || ""),
-        username: String(formData.get("username") || ""),
-        password: String(formData.get("password") || ""),
-        role: String(formData.get("role") || "student") as "student" | "teacher",
-      });
-      toast.success("Akun berhasil dibuat");
-      form.reset();
-      loadUsers();
-    } catch (err) {
-      console.error("Create user error:", err);
-      setError(err instanceof Error ? err.message : "Gagal membuat akun.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDelete = async (user: UserData) => {
-    if (!confirm(`Hapus akun ${user.name || user.username}?`)) return;
-    try {
-      await api.deleteUser(user.id);
-      toast.success("Akun dihapus");
-      loadUsers();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Gagal menghapus akun.");
-    }
-  };
-
-  const roleLabel = (role: string) =>
-    role === "admin" ? "Admin" : role === "teacher" ? "Guru" : role === "student" ? "Siswa" : "—";
-
-  return (
-    <Card className="rounded-2xl border-border/70 shadow-sm">
-      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0">
-        <div>
-          <CardTitle className="flex items-center gap-2 text-base tracking-tight">
-            <Users className="size-4 text-primary" /> Akun Guru & Siswa
-          </CardTitle>
-          <CardDescription>
-            Buat akun satu per satu atau impor banyak nama sekaligus. Password
-            awal minimal 8 karakter — bagikan ke pemilik akun.
-          </CardDescription>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0 rounded-lg"
-          onClick={() => setShowImport(true)}
-        >
-          <Upload className="size-4" /> Import
-        </Button>
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        <form
-          onSubmit={handleCreate}
-          className="grid gap-4 rounded-xl border border-border/70 bg-muted/30 p-4"
-        >
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="acc-name" className="text-xs">Nama lengkap *</Label>
-              <Input id="acc-name" name="name" placeholder="mis. Budi Santoso" required disabled={isSubmitting} />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="acc-username" className="text-xs">Username *</Label>
-              <Input
-                id="acc-username"
-                name="username"
-                placeholder="mis. budi.santoso"
-                pattern="[a-z0-9_.-]{3,32}"
-                title="3–32 karakter: huruf kecil, angka, . _ -"
-                required
-                disabled={isSubmitting}
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="acc-password" className="text-xs">Password awal *</Label>
-              <Input
-                id="acc-password"
-                name="password"
-                type="text"
-                minLength={8}
-                placeholder="min. 8 karakter"
-                required
-                disabled={isSubmitting}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label className="text-xs">Peran *</Label>
-              <Select name="role" defaultValue="student" disabled={isSubmitting}>
-                <SelectTrigger className="rounded-lg">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="student">Siswa</SelectItem>
-                  <SelectItem value="teacher">Guru</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <div>
-            <Button type="submit" disabled={isSubmitting} className="rounded-lg">
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" /> Membuat...
-                </>
-              ) : (
-                <>
-                  <UserPlus className="size-4" /> Buat Akun
-                </>
-              )}
-            </Button>
-          </div>
-        </form>
-
-        {users === undefined ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b bg-muted/60 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-3">Nama</th>
-                  <th className="px-4 py-3">Username</th>
-                  <th className="px-4 py-3">Peran</th>
-                  <th className="px-4 py-3 text-right">Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((user) => (
-                  <tr key={user.id} className="border-b last:border-b-0">
-                    <td className="px-4 py-3 font-medium">{user.name || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">@{user.username}</td>
-                    <td className="px-4 py-3">
-                      <Badge
-                        variant={user.role === "admin" ? "secondary" : "outline"}
-                        className="rounded-full"
-                      >
-                        {roleLabel(user.role)}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {user.role !== "admin" ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="rounded-lg text-muted-foreground hover:text-destructive"
-                          onClick={() => handleDelete(user)}
-                          title="Hapus akun"
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      ) : (
-                        <ShieldCheck className="ml-auto size-4 text-primary" />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-
-      <ImportUsersDialog open={showImport} onOpenChange={setShowImport} />
-      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
-    </Card>
-  );
+function formatDate(d: string) {
+  if (!d) return "-";
+  return new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
-// ---------------------------------------------------------------------------
-// Subjects section
-// ---------------------------------------------------------------------------
-
-function SubjectsSection() {
-  const [subjects, setSubjects] = useState<SubjectData[] | undefined>(undefined);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadSubjects = useCallback(async () => {
-    try {
-      const data = await api.listSubjects();
-      setSubjects(data);
-    } catch (err) {
-      console.error("Load subjects error:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSubjects();
-  }, [loadSubjects]);
-
-  const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-    const form = event.currentTarget as HTMLFormElement;
-    const formData = new FormData(form);
-    try {
-      await api.createSubject({
-        name: String(formData.get("name") || ""),
-        description: String(formData.get("description") || "") || undefined,
-      });
-      toast.success("Mapel ditambahkan");
-      form.reset();
-      loadSubjects();
-    } catch (err) {
-      console.error("Create subject error:", err);
-      setError(err instanceof Error ? err.message : "Gagal menambahkan mapel.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDelete = async (subject: SubjectData) => {
-    if (!confirm(`Hapus mapel ${subject.name}?`)) return;
-    try {
-      await api.deleteSubject(subject.id);
-      toast.success("Mapel dihapus");
-      loadSubjects();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Gagal menghapus mapel.");
-    }
-  };
-
-  return (
-    <Card className="rounded-2xl border-border/70 shadow-sm">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base tracking-tight">
-          <BookOpen className="size-4 text-primary" /> Mapel
-        </CardTitle>
-        <CardDescription>
-          Mapel menentukan "jalur" yang tampil di halaman siswa. Guru hanya bisa
-          memilih mapel dari daftar ini.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-6">
-        <form
-          onSubmit={handleCreate}
-          className="grid gap-4 rounded-xl border border-border/70 bg-muted/30 p-4 sm:grid-cols-[1fr_auto]"
-        >
-          <div className="grid gap-2">
-            <Label htmlFor="subj-name" className="text-xs">Nama mapel *</Label>
-            <Input
-              id="subj-name"
-              name="name"
-              placeholder="mis. Matematika, IPA, Bahasa Indonesia"
-              required
-              disabled={isSubmitting}
-            />
-            {error && <p className="text-sm text-destructive">{error}</p>}
-          </div>
-          <div className="flex items-end">
-            <Button type="submit" disabled={isSubmitting} className="rounded-lg">
-              {isSubmitting ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <>
-                  <BookOpen className="size-4" /> Tambah
-                </>
-              )}
-            </Button>
-          </div>
-        </form>
-
-        {subjects === undefined ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : subjects.length === 0 ? (
-          <Empty className="border-0">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <BookOpen className="size-6" />
-              </EmptyMedia>
-              <EmptyTitle>Belum ada mapel</EmptyTitle>
-              <EmptyDescription>
-                Tambahkan mapel pertama agar guru bisa membuat ujian.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {subjects.map((subject) => (
-              <div
-                key={subject.id}
-                className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/40 py-1.5 pl-3 pr-1.5"
-              >
-                <span className="text-sm font-medium">{subject.name}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 rounded-md text-muted-foreground hover:text-destructive"
-                  onClick={() => handleDelete(subject)}
-                  title="Hapus mapel"
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Schedule section
-// ---------------------------------------------------------------------------
-
-function ScheduleDialog({
-  exam,
-  open,
-  onOpenChange,
-  onSaved,
-}: {
-  exam: ExamData;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSaved: () => void;
-}) {
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-    const formData = new FormData(event.currentTarget);
-    const startsAtRaw = String(formData.get("startsAt") || "");
-    const endsAtRaw = String(formData.get("endsAt") || "");
-    const publish = String(formData.get("publish")) === "on";
-    try {
-      await api.setExamSchedule(exam.id, {
-        isActive: publish,
-        startsAt: startsAtRaw ? new Date(startsAtRaw).getTime() : undefined,
-        endsAt: endsAtRaw ? new Date(endsAtRaw).getTime() : undefined,
-      });
-      toast.success(publish ? "Ujian dipublikasikan" : "Ujian diarsipkan (draf)");
-      onOpenChange(false);
-      onSaved();
-    } catch (err) {
-      console.error("Schedule exam error:", err);
-      setError(err instanceof Error ? err.message : "Gagal menyimpan jadwal.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const toLocalInput = (ts: number | undefined) =>
-    ts ? new Date(ts).toISOString().slice(0, 16) : "";
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="rounded-2xl sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Atur jadwal — {exam.title}</DialogTitle>
-          <DialogDescription>
-            Tentukan kapan siswa boleh mulai mengerjakan, lalu publikasikan agar
-            muncul di halaman siswa.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="grid gap-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="sch-starts" className="text-xs">Buka pada</Label>
-              <Input
-                id="sch-starts"
-                name="startsAt"
-                type="datetime-local"
-                defaultValue={toLocalInput(exam.startsAt)}
-                disabled={isSubmitting}
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="sch-ends" className="text-xs">Tutup pada</Label>
-              <Input
-                id="sch-ends"
-                name="endsAt"
-                type="datetime-local"
-                defaultValue={toLocalInput(exam.endsAt)}
-                disabled={isSubmitting}
-              />
-            </div>
-          </div>
-          <label className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/30 px-3 py-2.5 text-sm font-medium">
-            <input
-              type="checkbox"
-              name="publish"
-              defaultChecked={exam.isActive}
-              disabled={isSubmitting}
-              className="size-4 rounded border-input accent-[var(--primary)]"
-            />
-            Publikasikan ke siswa (muncul di halaman siswa)
-          </label>
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Kosongkan "Buka pada" untuk langsung terbuka. "Tutup pada" adalah
-            batas terakhir siswa boleh mulai — ujian yang berjalan tetap lanjut
-            sampai waktunya habis.
-          </p>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <DialogFooter className="pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              disabled={isSubmitting}
-            >
-              Batal
-            </Button>
-            <Button type="submit" disabled={isSubmitting} className="rounded-lg">
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" /> Menyimpan...
-                </>
-              ) : (
-                <>
-                  <CalendarClock className="size-4" /> Simpan Jadwal
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ExamStatusBadge({ exam }: { exam: ExamData }) {
-  if (!exam.isActive) {
-    return (
-      <Badge variant="secondary" className="rounded-full">
-        Draf
-      </Badge>
-    );
-  }
-  const availability = examAvailability(exam);
-  if (availability.state === "not_yet") {
-    return (
-      <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 text-primary">
-        <CalendarClock className="size-3" /> Belum dibuka
-      </Badge>
-    );
-  }
-  if (availability.state === "closed") {
-    return (
-      <Badge variant="outline" className="rounded-full border-destructive/40 bg-destructive/10 text-destructive">
-        <AlertTriangle className="size-3" /> Ditutup
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="outline" className="rounded-full border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-      <CheckCircle2 className="size-3" /> Terbuka
-    </Badge>
-  );
-}
-
-function ScheduleSection() {
-  const [exams, setExams] = useState<ExamData[] | undefined>(undefined);
-  const [editing, setEditing] = useState<ExamData | null>(null);
-
-  const loadExams = useCallback(async () => {
-    try {
-      const data = await api.listExams();
-      setExams(data);
-    } catch (err) {
-      console.error("Load exams error:", err);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadExams();
-  }, [loadExams]);
-
-  return (
-    <Card className="rounded-2xl border-border/70 shadow-sm">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base tracking-tight">
-          <CalendarClock className="size-4 text-primary" /> Jadwal Ujian
-        </CardTitle>
-        <CardDescription>
-          Ujian buatan guru muncul sebagai Draf. Atur waktu buka/tutup lalu
-          publikasikan — hanya ujian terpublikasi yang terlihat siswa.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {exams === undefined ? (
-          <div className="flex justify-center py-10">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : exams.length === 0 ? (
-          <Empty className="border-0">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <CalendarClock className="size-6" />
-              </EmptyMedia>
-              <EmptyTitle>Belum ada ujian</EmptyTitle>
-              <EmptyDescription>
-                Belum ada ujian dari guru. Setelah guru membuat ujian, draf-nya
-                akan tampil di sini.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="overflow-hidden rounded-xl border">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b bg-muted/60 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <th className="px-4 py-3">Ujian</th>
-                  <th className="px-4 py-3">Mapel</th>
-                  <th className="px-4 py-3">Guru</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3 text-right">Aksi</th>
-                </tr>
-              </thead>
-              <tbody>
-                {exams.map((exam) => (
-                  <tr key={exam.id} className="border-b last:border-b-0">
-                    <td className="px-4 py-3">
-                      <p className="font-medium">{exam.title}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatDuration(exam.durationMinutes)}
-                        {exam.startsAt || exam.endsAt
-                          ? ` · ${exam.startsAt ? `Buka ${formatDateTime(exam.startsAt)}` : "Buka sekarang"}${exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}`
-                          : ""}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3">{exam.subjectName || "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{exam.teacherName || "—"}</td>
-                    <td className="px-4 py-3">
-                      <ExamStatusBadge exam={exam} />
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="rounded-lg"
-                        onClick={() => setEditing(exam)}
-                      >
-                        <CalendarClock className="size-3.5" /> Atur Jadwal
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </CardContent>
-
-      {editing && (
-        <ScheduleDialog
-          exam={editing}
-          open={editing !== null}
-          onOpenChange={(open) => {
-            if (!open) setEditing(null);
-          }}
-          onSaved={loadExams}
-        />
-      )}
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Admin dashboard
-// ---------------------------------------------------------------------------
+type Tab = "overview" | "articles" | "categories" | "users" | "comments" | "announcements";
 
 export default function AdminDashboard() {
-  const { user, setUser, signOut } = useAuth();
-  const [showPassword, setShowPassword] = useState(false);
-  const [showEditProfile, setShowEditProfile] = useState(false);
+  const { user, signOut } = useAuth();
+  const [tab, setTab] = useState<Tab>("overview");
+  const [stats, setStats] = useState<any>(null);
+  const [articles, setArticles] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [comments, setComments] = useState<any[]>([]);
+  const [announcements, setAnnouncements] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const handleSignOut = async () => {
-    await signOut();
-    window.location.href = "/";
-  };
+  useEffect(() => { loadTab(); }, [tab]);
 
-  const handleProfileUpdated = (name: string, username: string, token?: string) => {
-    if (user) {
-      setUser({ ...user, name, username });
-    }
-  };
+  async function loadTab() {
+    setLoading(true);
+    try {
+      if (tab === "overview") {
+        setStats(await api.getAdminStats());
+      } else if (tab === "articles") {
+        const res = await api.listAdminArticles({ limit: "50" });
+        setArticles(res.articles || []);
+      } else if (tab === "categories") {
+        setCategories(await api.listCategories());
+      } else if (tab === "users") {
+        setUsers(await api.listUsers());
+      } else if (tab === "comments") {
+        setComments(await api.listAdminComments());
+      } else if (tab === "announcements") {
+        setAnnouncements(await api.listAdminAnnouncements());
+      }
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
+  }
+
+  const tabs: { key: Tab; label: string; icon: any }[] = [
+    { key: "overview", label: "Ringkasan", icon: LayoutDashboard },
+    { key: "articles", label: "Artikel", icon: Newspaper },
+    { key: "categories", label: "Kategori", icon: Tags },
+    { key: "users", label: "Pengguna", icon: Users },
+    { key: "comments", label: "Komentar", icon: MessageSquare },
+    { key: "announcements", label: "Pengumuman", icon: Megaphone },
+  ];
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5">
-          <div className="flex items-center gap-2">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <ShieldCheck className="size-4" />
-            </div>
+    <div className="min-h-screen bg-background">
+      {/* Top bar */}
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/95 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-xs">M2</div>
             <div>
-              <p className="text-xs font-medium text-muted-foreground">
-                Panel Admin — {user?.name?.split(" ")[0] || "Admin"}
-              </p>
-              <h1 className="text-sm font-bold tracking-tight">Kelola Sekolah</h1>
+              <div className="text-sm font-bold">Dashboard Admin</div>
+              <div className="text-[10px] text-muted-foreground">MAN 2 Palembang</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-lg"
-              onClick={() => setShowEditProfile(true)}
-            >
-              <UserCog className="size-4" />
-              <span className="hidden sm:inline">Edit Profil</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-lg"
-              onClick={() => setShowPassword(true)}
-            >
-              <KeyRound className="size-4" />
-              <span className="hidden sm:inline">Ubah Password</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-lg"
-              onClick={handleSignOut}
-            >
-              <LogOut className="size-4" /> Keluar
+            <span className="text-xs text-muted-foreground hidden sm:block">{user?.name}</span>
+            <Button variant="ghost" size="sm" className="rounded-lg text-xs" onClick={signOut}>
+              Keluar
             </Button>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-5xl px-5 py-10">
-        <div className="mb-8 flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <GraduationCap className="size-5" />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold tracking-tight">
-              Panel Admin UjianKita
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Kelola akun, mapel, dan jadwal ujian. Semua alur login mengikuti
-              akun yang kamu buat di sini.
-            </p>
-          </div>
-        </div>
+      <div className="mx-auto max-w-7xl px-4 py-6">
+        <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
+          {/* Sidebar Nav */}
+          <aside className="space-y-1">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  tab === t.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                <t.icon className="size-4" />
+                {t.label}
+              </button>
+            ))}
+          </aside>
 
-        <div className="grid gap-6">
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0 }}
-          >
-            <AccountsSection />
-          </motion.div>
-          <Separator />
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.05 }}
-          >
-            <SubjectsSection />
-          </motion.div>
-          <Separator />
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.4, delay: 0.1 }}
-          >
-            <ScheduleSection />
-          </motion.div>
+          {/* Content */}
+          <main>
+            {loading ? (
+              <div className="animate-pulse space-y-4">
+                <div className="h-8 w-48 rounded bg-muted" />
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {[1, 2, 3, 4].map((n) => <div key={n} className="h-24 rounded-xl bg-muted" />)}
+                </div>
+              </div>
+            ) : (
+              <>
+                {tab === "overview" && stats && <OverviewTab stats={stats} />}
+                {tab === "articles" && <ArticlesTab articles={articles} onRefresh={loadTab} />}
+                {tab === "categories" && <CategoriesTab categories={categories} onRefresh={loadTab} />}
+                {tab === "users" && <UsersTab users={users} onRefresh={loadTab} />}
+                {tab === "comments" && <CommentsTab comments={comments} onRefresh={loadTab} />}
+                {tab === "announcements" && <AnnouncementsTab announcements={announcements} onRefresh={loadTab} />}
+              </>
+            )}
+          </main>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== OVERVIEW ==========
+function OverviewTab({ stats }: { stats: any }) {
+  const cards = [
+    { label: "Total Artikel", value: stats.totalArticles, icon: Newspaper, color: "bg-primary" },
+    { label: "Dipublikasikan", value: stats.publishedArticles, icon: BookOpen, color: "bg-emerald-500" },
+    { label: "Total Views", value: stats.totalViews.toLocaleString(), icon: TrendingUp, color: "bg-blue-500" },
+    { label: "Total Pengguna", value: stats.totalUsers, icon: Users, color: "bg-amber-500" },
+    { label: "Guru", value: stats.totalTeachers, icon: GraduationCap, color: "bg-purple-500" },
+    { label: "Siswa", value: stats.totalStudents, icon: Users, color: "bg-teal-500" },
+    { label: "Kategori", value: stats.totalCategories, icon: Tags, color: "bg-orange-500" },
+    { label: "Komentar Pending", value: stats.pendingComments, icon: MessageSquare, color: "bg-red-500" },
+  ];
+
+  return (
+    <div>
+      <h2 className="text-xl font-extrabold tracking-tight">Ringkasan Portal</h2>
+      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {cards.map((c) => (
+          <div key={c.label} className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-muted-foreground">{c.label}</span>
+              <div className={`flex size-8 items-center justify-center rounded-lg ${c.color} text-white`}>
+                <c.icon className="size-4" />
+              </div>
+            </div>
+            <div className="mt-2 text-2xl font-extrabold">{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Recent Articles */}
+      <div className="mt-8">
+        <h3 className="text-sm font-bold">Artikel Terbaru</h3>
+        <div className="mt-3 space-y-2">
+          {stats.recentArticles?.map((a: any) => (
+            <div key={a.id} className="flex items-center justify-between rounded-lg border border-border/70 bg-card px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium truncate">{a.title}</div>
+                <div className="text-[11px] text-muted-foreground">{a.author_name} · {formatDate(a.created_at)}</div>
+              </div>
+              <span className={`shrink-0 ml-3 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                a.status === "published" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" :
+                a.status === "draft" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" :
+                "bg-muted text-muted-foreground"
+              }`}>
+                {a.status}
+              </span>
+            </div>
+          ))}
         </div>
       </div>
 
-      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
-      <EditProfileDialog
-        open={showEditProfile}
-        onOpenChange={setShowEditProfile}
-        currentName={user?.name || ""}
-        currentUsername={user?.username || ""}
-        onUpdated={handleProfileUpdated}
-      />
-    </main>
+      {/* Top Articles */}
+      <div className="mt-8">
+        <h3 className="text-sm font-bold">Artikel Terpopuler</h3>
+        <div className="mt-3 space-y-2">
+          {stats.topArticles?.map((a: any, i: number) => (
+            <div key={a.id} className="flex items-center gap-3 rounded-lg border border-border/70 bg-card px-4 py-3">
+              <span className="text-lg font-extrabold text-muted-foreground/40">{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium truncate">{a.title}</div>
+                <div className="text-[11px] text-muted-foreground">{a.author_name}</div>
+              </div>
+              <span className="shrink-0 text-xs font-bold text-primary">{a.views} views</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== ARTICLES TAB ==========
+function ArticlesTab({ articles, onRefresh }: { articles: any[]; onRefresh: () => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ title: "", content: "", excerpt: "", category_id: "", status: "draft" });
+  const [categories, setCategories] = useState<any[]>([]);
+  const [editId, setEditId] = useState<number | null>(null);
+
+  useEffect(() => { api.listCategories().then(setCategories).catch(() => {}); }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      if (editId) {
+        await api.updateArticle(editId, form);
+      } else {
+        await api.createArticle(form);
+      }
+      setShowForm(false);
+      setForm({ title: "", content: "", excerpt: "", category_id: "", status: "draft" });
+      setEditId(null);
+      onRefresh();
+    } catch (err: any) { alert(err.message); }
+  }
+
+  function startEdit(a: any) {
+    setForm({ title: a.title, content: a.content, excerpt: a.excerpt || "", category_id: a.category_id || "", status: a.status });
+    setEditId(a.id);
+    setShowForm(true);
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Hapus artikel ini?")) return;
+    try { await api.deleteArticle(id); onRefresh(); } catch (err: any) { alert(err.message); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-extrabold tracking-tight">Manajemen Artikel</h2>
+        <Button onClick={() => { setShowForm(!showForm); setEditId(null); setForm({ title: "", content: "", excerpt: "", category_id: "", status: "draft" }); }} className="rounded-lg">
+          <Plus className="size-4" /> {showForm ? "Batal" : "Artikel Baru"}
+        </Button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="mt-4 rounded-xl border border-border/70 bg-card p-4 space-y-3">
+          <input
+            type="text" placeholder="Judul artikel" value={form.title}
+            onChange={(e) => setForm({ ...form, title: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+            required
+          />
+          <textarea
+            placeholder="Konten artikel (HTML support)" value={form.content}
+            onChange={(e) => setForm({ ...form, content: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30 min-h-[150px]"
+            required
+          />
+          <input
+            type="text" placeholder="Excerpt / ringkasan" value={form.excerpt}
+            onChange={(e) => setForm({ ...form, excerpt: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <select
+              value={form.category_id}
+              onChange={(e) => setForm({ ...form, category_id: e.target.value })}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
+            >
+              <option value="">Pilih Kategori</option>
+              {categories.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <select
+              value={form.status}
+              onChange={(e) => setForm({ ...form, status: e.target.value })}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none"
+            >
+              <option value="draft">Draft</option>
+              <option value="published">Publikasikan</option>
+            </select>
+          </div>
+          <Button type="submit" className="rounded-lg">{editId ? "Update" : "Simpan"}</Button>
+        </form>
+      )}
+
+      <div className="mt-4 space-y-2">
+        {articles.map((a) => (
+          <div key={a.id} className="flex items-center justify-between rounded-lg border border-border/70 bg-card px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium truncate">{a.title}</div>
+              <div className="text-[11px] text-muted-foreground">
+                {a.author_name} · {a.category_name || "Tanpa kategori"} · {formatDate(a.created_at)}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 ml-3">
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                a.status === "published" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+              }`}>{a.status}</span>
+              <Button variant="ghost" size="sm" className="rounded-lg text-xs" onClick={() => startEdit(a)}>Edit</Button>
+              <Button variant="ghost" size="sm" className="rounded-lg text-xs text-destructive" onClick={() => handleDelete(a.id)}>
+                <Trash2 className="size-3" />
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ========== CATEGORIES TAB ==========
+function CategoriesTab({ categories, onRefresh }: { categories: any[]; onRefresh: () => void }) {
+  const [form, setForm] = useState({ name: "", description: "", color: "#0d9488" });
+  const [showForm, setShowForm] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await api.createCategory(form);
+      setForm({ name: "", description: "", color: "#0d9488" });
+      setShowForm(false);
+      onRefresh();
+    } catch (err: any) { alert(err.message); }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Hapus kategori ini?")) return;
+    try { await api.deleteCategory(id); onRefresh(); } catch (err: any) { alert(err.message); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-extrabold tracking-tight">Kategori</h2>
+        <Button onClick={() => setShowForm(!showForm)} className="rounded-lg">
+          <Plus className="size-4" /> {showForm ? "Batal" : "Tambah"}
+        </Button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="mt-4 rounded-xl border border-border/70 bg-card p-4 space-y-3">
+          <input type="text" placeholder="Nama kategori" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30" required />
+          <input type="text" placeholder="Deskripsi" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30" />
+          <div className="flex items-center gap-3">
+            <input type="color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} className="size-8 rounded border" />
+            <span className="text-xs text-muted-foreground">Warna kategori</span>
+          </div>
+          <Button type="submit" className="rounded-lg">Simpan</Button>
+        </form>
+      )}
+
+      <div className="mt-4 space-y-2">
+        {categories.map((c) => (
+          <div key={c.id} className="flex items-center justify-between rounded-lg border border-border/70 bg-card px-4 py-3">
+            <div className="flex items-center gap-3">
+              <div className="size-4 rounded-full" style={{ backgroundColor: c.color }} />
+              <div>
+                <div className="text-sm font-medium">{c.name}</div>
+                <div className="text-[11px] text-muted-foreground">{c.article_count || 0} artikel · {c.description}</div>
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" className="rounded-lg text-xs text-destructive" onClick={() => handleDelete(c.id)}>
+              <Trash2 className="size-3" />
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ========== USERS TAB ==========
+function UsersTab({ users, onRefresh }: { users: any[]; onRefresh: () => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "student", nip: "", nisn: "", class_name: "" });
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await api.createUser(form);
+      setForm({ name: "", username: "", password: "", role: "student", nip: "", nisn: "", class_name: "" });
+      setShowForm(false);
+      onRefresh();
+    } catch (err: any) { alert(err.message); }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Hapus pengguna ini?")) return;
+    try { await api.deleteUser(id); onRefresh(); } catch (err: any) { alert(err.message); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-extrabold tracking-tight">Pengguna</h2>
+        <Button onClick={() => setShowForm(!showForm)} className="rounded-lg">
+          <Plus className="size-4" /> {showForm ? "Batal" : "Tambah"}
+        </Button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="mt-4 rounded-xl border border-border/70 bg-card p-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <input type="text" placeholder="Nama" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" required />
+            <input type="text" placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" required />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <input type="password" placeholder="Password (min 8 char)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" required />
+            <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none">
+              <option value="student">Siswa</option>
+              <option value="teacher">Guru</option>
+            </select>
+          </div>
+          {form.role === "teacher" && <input type="text" placeholder="NIP" value={form.nip} onChange={(e) => setForm({ ...form, nip: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" />}
+          {form.role === "student" && (
+            <div className="grid grid-cols-2 gap-3">
+              <input type="text" placeholder="NISN" value={form.nisn} onChange={(e) => setForm({ ...form, nisn: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" />
+              <input type="text" placeholder="Nama Kelas (misal: X IPA 1)" value={form.class_name} onChange={(e) => setForm({ ...form, class_name: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" />
+            </div>
+          )}
+          <Button type="submit" className="rounded-lg">Simpan</Button>
+        </form>
+      )}
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border/60 text-left text-xs font-bold text-muted-foreground">
+              <th className="pb-2 pr-4">Nama</th>
+              <th className="pb-2 pr-4">Username</th>
+              <th className="pb-2 pr-4">Role</th>
+              <th className="pb-2 pr-4">Detail</th>
+              <th className="pb-2">Aksi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id} className="border-b border-border/40">
+                <td className="py-2.5 pr-4 font-medium">{u.name}</td>
+                <td className="py-2.5 pr-4 text-muted-foreground">{u.username}</td>
+                <td className="py-2.5 pr-4">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    u.role === "admin" ? "bg-primary/10 text-primary" :
+                    u.role === "teacher" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" :
+                    "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  }`}>{u.role}</span>
+                </td>
+                <td className="py-2.5 pr-4 text-xs text-muted-foreground">
+                  {u.nip && `NIP: ${u.nip}`} {u.nisn && `NISN: ${u.nisn}`} {u.class_name && `· ${u.class_name}`}
+                </td>
+                <td className="py-2.5">
+                  {u.role !== "admin" && (
+                    <Button variant="ghost" size="sm" className="rounded-lg text-xs text-destructive" onClick={() => handleDelete(u.id)}>
+                      <Trash2 className="size-3" />
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ========== COMMENTS TAB ==========
+function CommentsTab({ comments, onRefresh }: { comments: any[]; onRefresh: () => void }) {
+  async function updateStatus(id: number, status: string) {
+    try { await api.updateCommentStatus(id, status); onRefresh(); } catch (err: any) { alert(err.message); }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Hapus komentar ini?")) return;
+    try { await api.deleteComment(id); onRefresh(); } catch (err: any) { alert(err.message); }
+  }
+
+  return (
+    <div>
+      <h2 className="text-xl font-extrabold tracking-tight">Komentar</h2>
+      <div className="mt-4 space-y-2">
+        {comments.length === 0 && <p className="text-sm text-muted-foreground">Belum ada komentar</p>}
+        {comments.map((c) => (
+          <div key={c.id} className="rounded-lg border border-border/70 bg-card px-4 py-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold">{c.user_name}</span>
+                <span className="ml-2 text-[11px] text-muted-foreground">pada "{c.article_title}"</span>
+              </div>
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                c.status === "approved" ? "bg-emerald-100 text-emerald-700" :
+                c.status === "rejected" ? "bg-red-100 text-red-700" :
+                "bg-amber-100 text-amber-700"
+              }`}>{c.status}</span>
+            </div>
+            <p className="mt-1.5 text-sm">{c.content}</p>
+            <div className="mt-2 flex gap-2">
+              {c.status !== "approved" && <Button size="sm" variant="outline" className="rounded-lg text-xs" onClick={() => updateStatus(c.id, "approved")}>Setujui</Button>}
+              {c.status !== "rejected" && <Button size="sm" variant="outline" className="rounded-lg text-xs" onClick={() => updateStatus(c.id, "rejected")}>Tolak</Button>}
+              <Button size="sm" variant="ghost" className="rounded-lg text-xs text-destructive" onClick={() => handleDelete(c.id)}><Trash2 className="size-3" /></Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ========== ANNOUNCEMENTS TAB ==========
+function AnnouncementsTab({ announcements, onRefresh }: { announcements: any[]; onRefresh: () => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ title: "", content: "", priority: "normal" });
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await api.createAnnouncement(form);
+      setForm({ title: "", content: "", priority: "normal" });
+      setShowForm(false);
+      onRefresh();
+    } catch (err: any) { alert(err.message); }
+  }
+
+  async function handleDelete(id: number) {
+    if (!confirm("Hapus pengumuman ini?")) return;
+    try { await api.deleteAnnouncement(id); onRefresh(); } catch (err: any) { alert(err.message); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-extrabold tracking-tight">Pengumuman</h2>
+        <Button onClick={() => setShowForm(!showForm)} className="rounded-lg">
+          <Plus className="size-4" /> {showForm ? "Batal" : "Baru"}
+        </Button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="mt-4 rounded-xl border border-border/70 bg-card p-4 space-y-3">
+          <input type="text" placeholder="Judul pengumuman" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none" required />
+          <textarea placeholder="Isi pengumuman" value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })}
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none min-h-[100px]" required />
+          <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none">
+            <option value="low">Rendah</option>
+            <option value="normal">Normal</option>
+            <option value="high">Tinggi</option>
+            <option value="urgent">Mendesak</option>
+          </select>
+          <Button type="submit" className="rounded-lg">Simpan</Button>
+        </form>
+      )}
+
+      <div className="mt-4 space-y-2">
+        {announcements.map((a) => (
+          <div key={a.id} className="rounded-lg border border-border/70 bg-card px-4 py-3">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-bold">{a.title}</div>
+              <div className="flex items-center gap-2">
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  a.priority === "urgent" ? "bg-red-100 text-red-700" :
+                  a.priority === "high" ? "bg-orange-100 text-orange-700" :
+                  a.priority === "normal" ? "bg-blue-100 text-blue-700" :
+                  "bg-muted text-muted-foreground"
+                }`}>{a.priority}</span>
+                <Button variant="ghost" size="sm" className="rounded-lg text-xs text-destructive" onClick={() => handleDelete(a.id)}>
+                  <Trash2 className="size-3" />
+                </Button>
+              </div>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{a.content}</p>
+            <div className="mt-1 text-[11px] text-muted-foreground">{formatDate(a.created_at)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

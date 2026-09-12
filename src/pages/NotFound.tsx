@@ -1,26 +1,25 @@
-import { motion } from "framer-motion";
+import { Link } from "react-router";
+import { Button } from "@/components/ui/button";
+import { ArrowLeft, Home } from "lucide-react";
 
 export default function NotFound() {
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.5 }}
-      className="min-h-screen flex flex-col"
-    >
-
-      
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col items-center justify-center">
-        <div className="max-w-5xl mx-auto relative px-4">
-          <div className="flex items-center justify-center min-h-[200px]">
-            <div className="text-center">
-              <h1 className="text-4xl font-bold text-gray-900 mb-4">404</h1>
-              <p className="text-lg text-gray-600">Page Not Found</p>
-            </div>
-          </div>
+    <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="text-center px-4">
+        <div className="text-6xl font-extrabold text-muted-foreground/20">404</div>
+        <h1 className="mt-4 text-xl font-extrabold">Halaman Tidak Ditemukan</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Halaman yang Anda cari tidak tersedia atau sudah dipindahkan.
+        </p>
+        <div className="mt-6 flex justify-center gap-3">
+          <Button asChild variant="outline" className="rounded-lg">
+            <Link to="/"><Home className="size-4" /> Beranda</Link>
+          </Button>
+          <Button asChild className="rounded-lg">
+            <Link to="/berita"><ArrowLeft className="size-4" /> Berita</Link>
+          </Button>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }

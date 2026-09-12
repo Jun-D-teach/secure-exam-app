@@ -1,5 +1,5 @@
 {
-  "name": "ujiankita",
+  "name": "portal-man2palembang",
   "private": true,
   "version": "1.0.0",
   "main": "server.js",
@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "postinstall": "npx vite build",
+
     "start": "node server.js",
     "preview": "vite preview"
   },
@@ -52,6 +52,7 @@
     "@vly-ai/integrations": "^0.6.13",
     "axios": "^1.13.2",
     "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^13.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -79,5 +80,7 @@
     "vite": "^7.2.6",
     "zod": "^4.1.13"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
+  }
 }

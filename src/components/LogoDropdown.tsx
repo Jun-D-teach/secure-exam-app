@@ -1,66 +1,33 @@
-// simple logo dropdown component that can be used to go to the landing page or sign out for the user
-
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import logo from "@/assets/logo.svg";
+import { LogOut, User } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { Home, LogOut } from "lucide-react";
-import { useNavigate } from "react-router";
+import { api } from "@/lib/api";
 
 export function LogoDropdown() {
-  const { isAuthenticated, signOut } = useAuth();
-  const navigate = useNavigate();
+  const { user, signOut } = useAuth();
 
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-      navigate("/");
-    } catch (error) {
-      console.error("Sign out error:", error);
-    }
-  };
+  if (!user) return null;
 
-  const handleGoHome = () => {
-    navigate("/");
-  };
+  function getDashboardLink() {
+    if (user?.role === "admin") return "/admin";
+    if (user?.role === "teacher") return "/guru";
+    return "/siswa";
+  }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-10 w-10">
-          <img
-            src={logo}
-            alt="Logo"
-            width={32}
-            height={32}
-            className="rounded-lg"
-          />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-48">
-        <DropdownMenuItem onClick={handleGoHome} className="cursor-pointer">
-          <Home className="mr-2 h-4 w-4" />
-          Landing Page
-        </DropdownMenuItem>
-        {isAuthenticated && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={handleSignOut}
-              className="cursor-pointer text-destructive focus:text-destructive"
-            >
-              <LogOut className="mr-2 h-4 w-4" />
-              Sign Out
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div className="flex items-center gap-3">
+      <a href={getDashboardLink()} className="flex items-center gap-2 text-sm">
+        <div className="flex size-7 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-xs">
+          {user.name?.charAt(0) || "U"}
+        </div>
+        <span className="hidden sm:block font-medium">{user.name}</span>
+      </a>
+      <button
+        onClick={signOut}
+        className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+      >
+        <LogOut className="size-3.5" />
+        <span className="hidden sm:block">Keluar</span>
+      </button>
+    </div>
   );
 }

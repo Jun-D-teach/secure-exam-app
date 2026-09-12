@@ -1,152 +1,28 @@
-import { motion } from "framer-motion";
+import { useState, useEffect } from "react";
 import {
-  ArrowRight,
-  CalendarClock,
-  CheckCircle2,
-  Clock3,
-  FileQuestion,
+  BookOpen,
+  Clock,
+  Eye,
   GraduationCap,
-  KeyRound,
-  LogOut,
-  ShieldCheck,
-  Timer,
-  TriangleAlert,
+  MessageSquare,
+  Newspaper,
 } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { ChangePasswordDialog } from "@/components/ChangePasswordDialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
+import { api } from "@/lib/api";
 import { useAuth } from "@/hooks/use-auth";
-import { api, type Exam, type Attempt } from "@/lib/api";
-import { examAvailability, formatDateTime, formatDuration } from "@/lib/exam-utils";
 
-function attemptFor(exam: Exam, attempts: Attempt[] | undefined) {
-  return attempts?.find((a) => a.examId === exam._id);
-}
-
-function StatusBadge({ attempt, exam }: { attempt: Attempt | undefined; exam: Exam }) {
-  if (!attempt) {
-    const availability = examAvailability(exam);
-    if (availability.state === "not_yet") {
-      return (
-        <Badge variant="outline" className="rounded-full border-primary/30 bg-primary/5 text-primary">
-          <CalendarClock className="size-3" /> Belum dibuka
-        </Badge>
-      );
-    }
-    if (availability.state === "closed") {
-      return (
-        <Badge variant="outline" className="rounded-full border-destructive/40 bg-destructive/10 text-destructive">
-          <TriangleAlert className="size-3" /> Ditutup
-        </Badge>
-      );
-    }
-    return (
-      <Badge variant="secondary" className="rounded-full">
-        Belum dikerjakan
-      </Badge>
-    );
-  }
-  if (attempt.status === "in_progress") {
-    return (
-      <Badge variant="outline" className="rounded-full border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
-        <Timer className="size-3" /> Sedang berjalan
-      </Badge>
-    );
-  }
-  if (attempt.status === "completed") {
-    return (
-      <Badge variant="outline" className="rounded-full border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
-        <CheckCircle2 className="size-3" /> Selesai
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="outline" className="rounded-full border-destructive/40 bg-destructive/10 text-destructive">
-      <TriangleAlert className="size-3" /> Waktu habis
-    </Badge>
-  );
-}
-
-function ExamEntry({ exam, attempt }: { exam: Exam; attempt: Attempt | undefined }) {
-  const availability = examAvailability(exam);
-  return (
-    <div className="flex flex-col gap-4 rounded-xl border border-border/70 bg-background p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-bold tracking-tight">{exam.title}</h3>
-          {exam.description && (
-            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-muted-foreground">
-              {exam.description}
-            </p>
-          )}
-        </div>
-        <StatusBadge attempt={attempt} exam={exam} />
-      </div>
-      <div className="flex flex-wrap items-center gap-4 text-xs font-medium text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <Clock3 className="size-3.5 text-primary" />
-          {formatDuration(exam.durationMinutes)}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <ShieldCheck className="size-3.5 text-primary" />
-          Terpantau
-        </span>
-        {(exam.startsAt || exam.endsAt) && (
-          <span className="flex items-center gap-1.5">
-            <CalendarClock className="size-3.5 text-primary" />
-            {exam.startsAt ? `Buka ${formatDateTime(exam.startsAt)}` : "Sudah dibuka"}
-            {exam.endsAt ? ` · Tutup ${formatDateTime(exam.endsAt)}` : ""}
-          </span>
-        )}
-      </div>
-      <div>
-        {attempt ? (
-          <Button asChild className="w-full rounded-lg sm:w-auto">
-            <Link to={`/exam/${exam._id}`}>
-              {attempt.status === "in_progress" ? "Lanjutkan" : "Lihat Hasil"}
-              <ArrowRight className="size-4" />
-            </Link>
-          </Button>
-        ) : availability.state === "not_yet" ? (
-          <Button disabled className="w-full rounded-lg sm:w-auto">
-            <CalendarClock className="size-4" />
-            Dibuka {formatDateTime(availability.opensAt)}
-          </Button>
-        ) : availability.state === "closed" ? (
-          <Button disabled className="w-full rounded-lg sm:w-auto">
-            Ujian ditutup
-          </Button>
-        ) : (
-          <Button asChild className="w-full rounded-lg sm:w-auto">
-            <Link to={`/exam/${exam._id}`}>
-              Mulai Ujian
-              <ArrowRight className="size-4" />
-            </Link>
-          </Button>
-        )}
-      </div>
-    </div>
-  );
+function formatDate(d: string) {
+  if (!d) return "-";
+  return new Date(d).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
 }
 
 export default function StudentDashboard() {
   const { user, signOut } = useAuth();
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [stats, setStats] = useState<any>(null);
+  const [articles, setArticles] = useState<any[]>([]);
+  const [announcements, setAnnouncements] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showPassword, setShowPassword] = useState(false);
-
-  const firstName = user?.name?.split(" ")[0] || "Siswa";
 
   useEffect(() => {
     loadData();
@@ -154,128 +30,171 @@ export default function StudentDashboard() {
 
   async function loadData() {
     try {
-      const [examsRes, attemptsRes] = await Promise.all([
-        api.get<Exam[]>("/api/exams"),
-        api.get<Attempt[]>("/api/attempts/my"),
+      const [s, artRes, ann] = await Promise.all([
+        api.getStudentStats(),
+        api.listArticles({ limit: "6" }),
+        api.listAnnouncements(),
       ]);
-      setExams(examsRes);
-      setAttempts(attemptsRes);
-    } catch (err) {
-      console.error("Failed to load student data:", err);
+      setStats(s);
+      setArticles(artRes.articles || []);
+      setAnnouncements(ann || []);
+    } catch (e) {
+      console.error(e);
     } finally {
       setLoading(false);
     }
   }
 
-  const handleSignOut = async () => {
-    await signOut();
-    window.location.href = "/";
-  };
-
-  // Group published exams by subject
-  const groups: { subjectName: string; exams: Exam[] }[] = [];
-  for (const exam of exams) {
-    const name = exam.subjectName || "Tanpa mapel";
-    const group = groups.find((g) => g.subjectName === name);
-    if (group) {
-      group.exams.push(exam);
-    } else {
-      groups.push({ subjectName: name, exams: [exam] });
-    }
-  }
-
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur-md">
-        <div className="mx-auto flex h-16 w-full max-w-5xl items-center justify-between px-5">
-          <div>
-            <p className="text-xs font-medium text-muted-foreground">
-              Halo, {firstName} 👋
-            </p>
-            <h1 className="text-sm font-bold tracking-tight">Ujian Saya</h1>
+    <div className="min-h-screen bg-background">
+      <header className="sticky top-0 z-40 border-b border-border/60 bg-background/95 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
+          <div className="flex items-center gap-3">
+            <div className="flex size-8 items-center justify-center rounded-lg bg-emerald-600 text-white font-bold text-xs">S</div>
+            <div>
+              <div className="text-sm font-bold">Dashboard Siswa</div>
+              <div className="text-[10px] text-muted-foreground">MAN 2 Palembang</div>
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-lg"
-              onClick={() => setShowPassword(true)}
-            >
-              <KeyRound className="size-4" />
-              <span className="hidden sm:inline">Ubah Password</span>
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="rounded-lg"
-              onClick={handleSignOut}
-            >
-              <LogOut className="size-4" /> Keluar
-            </Button>
+            <span className="text-xs text-muted-foreground hidden sm:block">{user?.name}</span>
+            <Button variant="ghost" size="sm" className="rounded-lg text-xs" onClick={signOut}>Keluar</Button>
           </div>
         </div>
       </header>
 
-      <div className="mx-auto w-full max-w-5xl px-5 py-10">
-        {loading ? (
-          <div className="flex justify-center py-24">
-            <Timer className="size-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : exams.length === 0 ? (
-          <Empty className="mx-auto mt-8 max-w-md rounded-2xl border border-dashed">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <FileQuestion className="size-6" />
-              </EmptyMedia>
-              <EmptyTitle>Belum ada ujian</EmptyTitle>
-              <EmptyDescription>
-                Admin belum menjadwalkan ujian apa pun. Cek kembali nanti —
-                ujian yang tersedia akan muncul di halaman ini.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <div className="space-y-8">
-            <div>
-              <h2 className="text-lg font-bold tracking-tight">Pilih mapel</h2>
-              <p className="text-sm text-muted-foreground">
-                Pilih mapel untuk mengerjakan ujian yang dijadwalkan.
-              </p>
+      <div className="mx-auto max-w-5xl px-4 py-6">
+        {/* Welcome */}
+        <div className="rounded-xl bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-500/20 p-6">
+          <h1 className="text-xl font-extrabold">Selamat Datang, {user?.name} 👋</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Portal berita MAN 2 Palembang — baca berita terkini dan informasi penting.
+          </p>
+        </div>
+
+        {/* Stats */}
+        {stats && (
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <div className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Komentar Saya</span>
+                <MessageSquare className="size-4 text-primary" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold">{stats.totalComments}</div>
             </div>
-            {groups.map((group, gi) => (
-              <motion.section
-                key={group.subjectName}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: gi * 0.06 }}
-              >
-                <div className="mb-4 flex items-center gap-2.5">
-                  <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-                    <GraduationCap className="size-4" />
+            <div className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Berita Tersedia</span>
+                <Newspaper className="size-4 text-blue-500" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold">{articles.length}+</div>
+            </div>
+            <div className="rounded-xl border border-border/70 bg-card p-4 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-muted-foreground">Pengumuman Aktif</span>
+                <GraduationCap className="size-4 text-amber-500" />
+              </div>
+              <div className="mt-2 text-2xl font-extrabold">{announcements.length}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Announcements */}
+        {announcements.length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-lg font-extrabold">📢 Pengumuman</h2>
+            <div className="mt-3 space-y-2">
+              {announcements.map((a: any) => (
+                <div key={a.id} className={`rounded-xl border px-4 py-3 ${
+                  a.priority === "urgent" ? "border-red-300 bg-red-50 dark:border-red-900 dark:bg-red-950/30" :
+                  a.priority === "high" ? "border-orange-300 bg-orange-50 dark:border-orange-900 dark:bg-orange-950/30" :
+                  "border-border/70 bg-card"
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold">{a.title}</h3>
+                    {a.priority === "urgent" && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700">URGENT</span>}
+                    {a.priority === "high" && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold text-orange-700">PENTING</span>}
                   </div>
-                  <div>
-                    <h3 className="font-bold tracking-tight">{group.subjectName}</h3>
-                    <p className="text-xs text-muted-foreground">
-                      {group.exams.length} ujian
-                    </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{a.content}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Latest Articles */}
+        <div className="mt-8">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-extrabold">📰 Berita Terbaru</h2>
+            <Link to="/berita" className="text-sm font-medium text-primary hover:underline">Lihat Semua →</Link>
+          </div>
+
+          {loading ? (
+            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {[1, 2, 3].map((n) => (
+                <div key={n} className="animate-pulse rounded-xl border border-border/70 bg-card p-4">
+                  <div className="mb-3 h-3 w-20 rounded bg-muted" />
+                  <div className="mb-2 h-4 w-full rounded bg-muted" />
+                  <div className="h-4 w-3/4 rounded bg-muted" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {articles.map((article: any) => (
+                <Link
+                  key={article.id}
+                  to={`/berita/${article.slug}`}
+                  className="group rounded-xl border border-border/70 bg-card p-4 shadow-sm transition-all hover:shadow-md hover:border-primary/30"
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    {article.category_name && (
+                      <span
+                        className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                        style={{ backgroundColor: article.category_color || "#0d9488" }}
+                      >
+                        {article.category_name}
+                      </span>
+                    )}
                   </div>
+                  <h3 className="line-clamp-2 text-sm font-bold leading-snug group-hover:text-primary transition-colors">
+                    {article.title}
+                  </h3>
+                  <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{article.excerpt}</p>
+                  <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
+                    <span className="flex items-center gap-1"><Clock className="size-3" />{formatDate(article.published_at)}</span>
+                    <span className="flex items-center gap-1"><Eye className="size-3" />{article.views}</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* My Comments */}
+        {stats?.recentComments && stats.recentComments.length > 0 && (
+          <div className="mt-8">
+            <h2 className="text-lg font-extrabold">💬 Komentar Saya</h2>
+            <div className="mt-3 space-y-2">
+              {stats.recentComments.map((c: any) => (
+                <div key={c.id} className="rounded-xl border border-border/70 bg-card px-4 py-3">
+                  <div className="flex items-center justify-between">
+                    <Link to={`/berita/${c.article_slug}`} className="text-sm font-bold hover:text-primary transition-colors">
+                      {c.article_title}
+                    </Link>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                      c.status === "approved" ? "bg-emerald-100 text-emerald-700" :
+                      c.status === "rejected" ? "bg-red-100 text-red-700" :
+                      "bg-amber-100 text-amber-700"
+                    }`}>{c.status}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{c.content}</p>
                 </div>
-                <div className="grid gap-4 lg:grid-cols-2">
-                  {group.exams.map((exam) => (
-                    <Card key={exam._id} className="rounded-2xl border-border/70 shadow-sm">
-                      <CardContent className="p-0">
-                        <ExamEntry exam={exam} attempt={attemptFor(exam, attempts)} />
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </motion.section>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </div>
-
-      <ChangePasswordDialog open={showPassword} onOpenChange={setShowPassword} />
-    </main>
+    </div>
   );
 }

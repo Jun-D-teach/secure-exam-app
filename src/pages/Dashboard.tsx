@@ -1,39 +1,20 @@
-import { Loader2 } from "lucide-react";
-import { Navigate } from "react-router";
+import { useEffect } from "react";
+import { useNavigate } from "react-router";
 import { useAuth } from "@/hooks/use-auth";
-import AdminDashboard from "@/pages/AdminDashboard";
-import StudentDashboard from "@/pages/StudentDashboard";
-import TeacherDashboard from "@/pages/TeacherDashboard";
 
 export default function Dashboard() {
-  const { user, isLoading } = useAuth();
+  const { user } = useAuth();
+  const navigate = useNavigate();
 
-  if (isLoading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      </main>
-    );
-  }
+  useEffect(() => {
+    if (user?.role === "admin") navigate("/admin", { replace: true });
+    else if (user?.role === "teacher") navigate("/guru", { replace: true });
+    else navigate("/siswa", { replace: true });
+  }, [user, navigate]);
 
-  if (!user?.role) {
-    // Every account is created by the admin with a role, so this only
-    // happens for legacy accounts. Send them to the landing page.
-    return <Navigate to="/" replace />;
-  }
-
-  if (user.role === "admin") {
-    return <AdminDashboard />;
-  }
-
-  if (user.role === "teacher") {
-    return <TeacherDashboard />;
-  }
-
-  if (user.role === "student") {
-    return <StudentDashboard />;
-  }
-
-  // Fallback for other legacy roles (member/user)
-  return <Navigate to="/" replace />;
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="animate-pulse text-muted-foreground">Mengalihkan...</div>
+    </div>
+  );
 }

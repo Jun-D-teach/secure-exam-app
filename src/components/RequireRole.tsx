@@ -1,28 +1,20 @@
-import { Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
 import { Navigate } from "react-router";
 import { useAuth } from "@/hooks/use-auth";
 
-export function RequireRole({
-  role,
-  children,
-}: {
-  role: "teacher" | "student" | "admin";
-  children: ReactNode;
-}) {
-  const { isLoading, user } = useAuth();
+export function RequireRole({ children, role }: { children: React.ReactNode; role: string }) {
+  const { user, isLoading } = useAuth();
 
   if (isLoading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      </main>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-pulse text-muted-foreground">Memuat...</div>
+      </div>
     );
   }
 
-  if (user?.role !== role) {
-    return <Navigate to="/dashboard" replace />;
+  if (!user || user.role !== role) {
+    return <Navigate to="/auth" replace />;
   }
 
-  return children;
+  return <>{children}</>;
 }

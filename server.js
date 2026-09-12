@@ -1,450 +1,386 @@
 // ============================================================
-//  UjianKita — Express.js backend (Google Sheets API)
+//  Portal Berita MAN 2 Palembang — Express.js + SQLite Backend
 // ============================================================
 
 var express = require("express");
 var cors = require("cors");
 var path = require("path");
 var fs = require("fs");
-var https = require("https");
+var Database = require("better-sqlite3");
+var bcrypt = require("bcryptjs");
+var jwt = require("jsonwebtoken");
 
 var app = express();
 var PORT = process.env.PORT || 3001;
+var JWT_SECRET = process.env.JWT_SECRET || "man2palembang-portal-secret-2024";
 
 app.use(cors());
-app.use(express.json({ limit: "5mb" }));
-
-// --- Startup logging ---
-console.log("[UjianKita] server.js loaded at", new Date().toISOString());
-console.log("[UjianKita] Node.js", process.version, "| PID", process.pid);
-
-// --- Global error handlers ---
-process.on("uncaughtException", function (err) {
-  console.error("[UjianKita] UNCAUGHT EXCEPTION:", err);
-});
-process.on("unhandledRejection", function (reason) {
-  console.error("[UjianKita] UNHANDLED REJECTION:", reason);
-});
+app.use(express.json({ limit: "10mb" }));
 
 // ============================================================
-//  Google Sheets API (direct crypto, no googleapis)
+//  DATABASE SETUP
 // ============================================================
 
-var normalizePemKey = (function () {
-  function fixPemLineWrapping(pem) {
-    var lines = pem.split("\n");
-    var result = [];
-    var currentLine = "";
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (line === "") continue;
-      if (line.indexOf("-----") === 0) {
-        if (currentLine) { result.push(currentLine); currentLine = ""; }
-        result.push(line);
-      } else {
-        currentLine += line;
-        if (currentLine.length >= 64) {
-          result.push(currentLine.substring(0, 64));
-          currentLine = currentLine.substring(64);
-        }
-      }
-    }
-    if (currentLine) result.push(currentLine);
-    return result.join("\n");
-  }
+var dbPath = path.join(process.cwd(), "portal.db");
+var db = new Database(dbPath);
 
-  function normalizePemKey(raw) {
-    if (!raw || typeof raw !== "string") return "";
-    var s = raw;
-    // Remove surrounding quotes
-    if ((s.charCodeAt(0) === 34 && s.charCodeAt(s.length - 1) === 34) ||
-        (s.charCodeAt(0) === 39 && s.charCodeAt(s.length - 1) === 39)) {
-      s = s.substring(1, s.length - 1);
-    }
-    // Multi-pass newline conversion
-    for (var pass = 0; pass < 5; pass++) {
-      var before = s.length;
-      s = s.replace(/\\r\\n/g, "\n");
-      s = s.replace(/\\r/g, "\n");
-      s = s.replace(/\\n/g, "\n");
-      s = s.replace(/\\\\/g, "\\");
-      if (s.length === before) break;
-    }
-    // Fix line wrapping
-    s = fixPemLineWrapping(s);
-    // Collapse blank lines
-    s = s.replace(/\n{3,}/g, "\n\n");
-    return s.trim();
-  }
-  return normalizePemKey;
-})();
+// Enable WAL mode for better concurrent read performance
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
 
-var SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "";
-var SA_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
-var SA_KEY = "";
-var SA_KEY_OBJ = null;
+// Create tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'student' CHECK(role IN ('admin','teacher','student')),
+    avatar TEXT DEFAULT '',
+    bio TEXT DEFAULT '',
+    nip TEXT DEFAULT '',
+    nisn TEXT DEFAULT '',
+    class_name TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 
-console.log("[UjianKita] Loading Google credentials...");
+  CREATE TABLE IF NOT EXISTS categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    description TEXT DEFAULT '',
+    color TEXT DEFAULT '#0d9488',
+    icon TEXT DEFAULT 'newspaper',
+    sort_order INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 
-// Source 1: GOOGLE_SERVICE_ACCOUNT_JSON (entire JSON key file content)
-if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-  var jsonRaw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  console.log("[UjianKita] JSON env raw length:", jsonRaw.length, "first 100:", jsonRaw.substring(0, 100));
+  CREATE TABLE IF NOT EXISTS articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    content TEXT NOT NULL,
+    excerpt TEXT DEFAULT '',
+    featured_image TEXT DEFAULT '',
+    category_id INTEGER,
+    author_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published','archived')),
+    views INTEGER DEFAULT 0,
+    is_featured INTEGER DEFAULT 0,
+    is_pinned INTEGER DEFAULT 0,
+    published_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
+    FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
+  );
 
-  // Try multiple JSON parse strategies
-  var saJson = null;
-  var strategies = [
-    function (s) { return JSON.parse(s); },
-    function (s) { var u = s.replace(/\\"/g, '"'); return JSON.parse(u); },
-    function (s) { var u = s.replace(/\\n/g, "\n"); return JSON.parse(u); },
-    function (s) { var u = s.replace(/\\"/g, '"').replace(/\\n/g, "\n").replace(/\\r/g, "").replace(/\\t/g, "    "); return JSON.parse(u); },
+  CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS article_tags (
+    article_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (article_id, tag_id),
+    FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    article_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1,
+    priority TEXT DEFAULT 'normal' CHECK(priority IN ('low','normal','high','urgent')),
+    expires_at DATETIME,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS sliders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    subtitle TEXT DEFAULT '',
+    image TEXT DEFAULT '',
+    link TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    is_active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS page_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS activity_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    action TEXT NOT NULL,
+    entity_type TEXT,
+    entity_id INTEGER,
+    details TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_articles_slug ON articles(slug);
+  CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);
+  CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category_id);
+  CREATE INDEX IF NOT EXISTS idx_articles_author ON articles(author_id);
+  CREATE INDEX IF NOT EXISTS idx_articles_published ON articles(published_at);
+  CREATE INDEX IF NOT EXISTS idx_comments_article ON comments(article_id);
+  CREATE INDEX IF NOT EXISTS idx_comments_status ON comments(status);
+`);
+
+// ============================================================
+//  SEED DATA
+// ============================================================
+
+var userCount = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
+if (userCount === 0) {
+  console.log("[Portal] Seeding initial data...");
+
+  // Default admin
+  var adminHash = bcrypt.hashSync("admin123", 10);
+  db.prepare("INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, ?)").run(
+    "Administrator", "admin", adminHash, "admin"
+  );
+
+  // Default teacher
+  var teacherHash = bcrypt.hashSync("guru1234", 10);
+  db.prepare("INSERT INTO users (name, username, password_hash, role, nip, bio) VALUES (?, ?, ?, ?, ?, ?)").run(
+    "Pak Ahmad Susanto", "guru", teacherHash, "teacher", "198501012010011001",
+    "Guru Matematika MAN 2 Palembang"
+  );
+
+  // Default student
+  var studentHash = bcrypt.hashSync("siswa1234", 10);
+  db.prepare("INSERT INTO users (name, username, password_hash, role, nisn, class_name) VALUES (?, ?, ?, ?, ?, ?)").run(
+    "Siti Nurhaliza", "siswa", studentHash, "student", "0081234567", "X IPA 1"
+  );
+
+  // Categories
+  var categories = [
+    { name: "Berita Utama", slug: "berita-utama", description: "Berita terkini dan penting dari MAN 2 Palembang", color: "#0d9488", icon: "newspaper", sort_order: 1 },
+    { name: "Pengumuman", slug: "pengumuman", description: "Pengumuman resmi dari pimpinan madrasah", color: "#dc2626", icon: "megaphone", sort_order: 2 },
+    { name: "Kegiatan", slug: "kegiatan", description: "Kegiatan dan acara di MAN 2 Palembang", color: "#2563eb", icon: "calendar", sort_order: 3 },
+    { name: "Akademik", slug: "akademik", description: "Informasi akademik dan kurikulum", color: "#7c3aed", icon: "graduation-cap", sort_order: 4 },
+    { name: "Prestasi", slug: "prestasi", description: "Prestasi siswa dan guru MAN 2 Palembang", color: "#ca8a04", icon: "trophy", sort_order: 5 },
+    { name: "Ekstrakurikuler", slug: "ekstrakurikuler", description: "Kegiatan ekstrakurikuler dan pembinaan", color: "#059669", icon: "users", sort_order: 6 },
+    { name: "Infografis", slug: "infografis", description: "Infografis dan data visual MAN 2 Palembang", color: "#ea580c", icon: "bar-chart", sort_order: 7 },
+    { name: "Artikel", slug: "artikel", description: "Artikel opini dan tulisan warga madrasah", color: "#0891b2", icon: "pen-line", sort_order: 8 },
   ];
 
-  for (var si = 0; si < strategies.length; si++) {
-    try {
-      saJson = strategies[si](jsonRaw);
-      console.log("[UjianKita] JSON strategy", si + 1, "OK. Keys:", Object.keys(saJson).join(", "));
-      break;
-    } catch (e) {
-      console.log("[UjianKita] JSON strategy", si + 1, "failed:", e.message);
-    }
-  }
-
-  // Fallback: try wrapping without braces
-  if (!saJson) {
-    try {
-      var wrapped = jsonRaw;
-      if (wrapped.charCodeAt(0) !== 123) wrapped = "{" + wrapped + "}";
-      saJson = JSON.parse(wrapped);
-      console.log("[UjianKita] JSON wrapped strategy OK. Keys:", Object.keys(saJson).join(", "));
-    } catch (e) {
-      console.log("[UjianKita] JSON wrapped strategy failed:", e.message);
-    }
-  }
-
-  // Fallback: regex extraction from raw string
-  if (!saJson) {
-    try {
-      var keyMatch = jsonRaw.match(/-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/);
-      var emailMatch = jsonRaw.match(/"client_email"\s*:\s*"([^"]+)"/);
-      if (keyMatch) {
-        SA_KEY = normalizePemKey(keyMatch[0]);
-        if (emailMatch && !SA_EMAIL) SA_EMAIL = emailMatch[1];
-        console.log("[UjianKita] Regex extraction OK:", SA_KEY.length, "chars");
-      }
-    } catch (e) {
-      console.log("[UjianKita] Regex extraction failed:", e.message);
-    }
-  }
-
-  if (saJson) {
-    var rawKey = saJson.private_key || "";
-    SA_KEY = normalizePemKey(rawKey);
-    if (!SA_EMAIL && saJson.client_email) SA_EMAIL = saJson.client_email;
-    console.log("[UjianKita] Private key loaded from JSON:", SA_KEY.length, "chars");
-  }
-}
-
-// Source 2: GOOGLE_PRIVATE_KEY_B64
-if (!SA_KEY && process.env.GOOGLE_PRIVATE_KEY_B64) {
-  try {
-    SA_KEY = normalizePemKey(Buffer.from(process.env.GOOGLE_PRIVATE_KEY_B64, "base64").toString("utf8"));
-    console.log("[UjianKita] Private key loaded from B64:", SA_KEY.length, "chars");
-  } catch (e) {
-    console.error("[UjianKita] Failed to decode B64 key:", e.message);
-  }
-}
-
-// Source 3: GOOGLE_PRIVATE_KEY (raw PEM)
-if (!SA_KEY && process.env.GOOGLE_PRIVATE_KEY) {
-  SA_KEY = normalizePemKey(process.env.GOOGLE_PRIVATE_KEY);
-  console.log("[UjianKita] Private key loaded from RAW:", SA_KEY.length, "chars");
-}
-
-// Validate key format
-if (SA_KEY && SA_KEY.indexOf("-----BEGIN") === -1) {
-  console.warn("[UjianKita] WARNING: Key does not start with '-----BEGIN'. First 30 chars:", SA_KEY.substring(0, 30));
-}
-
-// Pre-parse key object for crypto operations
-function safeParsePemKey(pem) {
-  var crypto = require("crypto");
-  if (!pem || typeof pem !== "string") return null;
-
-  var approaches = [
-    function () { return crypto.createPrivateKey(pem); },
-    function () { return crypto.createPrivateKey({ key: fixPemWrapping(pem), format: "pem", type: "pkcs8" }); },
-    function () { return crypto.createPrivateKey({ key: pem, format: "pem", type: "pkcs1" }); },
-  ];
-
-  for (var ai = 0; ai < approaches.length; ai++) {
-    try {
-      return approaches[ai]();
-    } catch (e) {
-      console.log("[UjianKita] Key approach", ai + 1, "failed:", e.message);
-    }
-  }
-  return null;
-
-  function fixPemWrapping(p) {
-    var lines = p.split("\n");
-    var result = [];
-    var buf = "";
-    for (var i = 0; i < lines.length; i++) {
-      var l = lines[i].trim();
-      if (l === "") continue;
-      if (l.indexOf("-----") === 0) {
-        if (buf) { result.push(buf); buf = ""; }
-        result.push(l);
-      } else {
-        buf += l;
-        if (buf.length >= 64) {
-          result.push(buf.substring(0, 64));
-          buf = buf.substring(64);
-        }
-      }
-    }
-    if (buf) result.push(buf);
-    return result.join("\n");
-  }
-}
-
-if (SA_KEY) {
-  SA_KEY_OBJ = safeParsePemKey(SA_KEY);
-  if (SA_KEY_OBJ) {
-    console.log("[UjianKita] Key crypto validation: OK");
-  } else {
-    console.error("[UjianKita] Key crypto validation: FAILED — add NODE_OPTIONS=--openssl-legacy-provider");
-  }
-}
-
-// --- HTTPS request helper ---
-function httpsRequest(url, opts, body) {
-  return new Promise(function (resolve, reject) {
-    var urlObj = new (require("url").URL)(url);
-    var options = {
-      hostname: urlObj.hostname,
-      port: urlObj.port || 443,
-      path: urlObj.pathname + urlObj.search,
-      method: opts.method || "GET",
-      headers: opts.headers || {},
-    };
-    var req = https.request(options, function (res) {
-      var chunks = [];
-      res.on("data", function (chunk) { chunks.push(chunk); });
-      res.on("end", function () {
-        var raw = Buffer.concat(chunks).toString("utf8");
-        var data;
-        try { data = JSON.parse(raw); } catch (_e) { data = { raw: raw }; }
-        resolve({ status: res.statusCode, data: data });
-      });
-    });
-    req.on("error", reject);
-    if (body) req.write(body);
-    req.end();
+  var insertCat = db.prepare("INSERT INTO categories (name, slug, description, color, icon, sort_order) VALUES (?, ?, ?, ?, ?, ?)");
+  categories.forEach(function(c) {
+    insertCat.run(c.name, c.slug, c.description, c.color, c.icon, c.sort_order);
   });
-}
 
-// --- OAuth2 token ---
-var _accessToken = null;
-var _tokenExpiry = 0;
-
-function createSignedJwt() {
-  var crypto = require("crypto");
-  var now = Math.floor(Date.now() / 1000);
-  var header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
-  var payload = Buffer.from(JSON.stringify({
-    iss: SA_EMAIL,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
-    aud: "https://oauth2.googleapis.com/token",
-    exp: now + 3600,
-    iat: now,
-  })).toString("base64url");
-
-  var dataToSign = header + "." + payload;
-  var sign = crypto.createSign("RSA-SHA256");
-  sign.update(dataToSign);
-  var signature = sign.sign(SA_KEY_OBJ, "base64url");
-  return dataToSign + "." + signature;
-}
-
-async function getAccessToken() {
-  if (_accessToken && Date.now() < _tokenExpiry) return _accessToken;
-  console.log("[UjianKita] Requesting new access token...");
-  var jwt = await createSignedJwt();
-  var body = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=" + encodeURIComponent(jwt);
-  var res = await httpsRequest("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) },
-  }, body);
-  if (res.status !== 200 || !res.data.access_token) {
-    throw new Error("Failed to get access token (HTTP " + res.status + "): " + JSON.stringify(res.data));
-  }
-  _accessToken = res.data.access_token;
-  _tokenExpiry = Date.now() + (res.data.expires_in - 60) * 1000;
-  console.log("[UjianKita] Access token obtained, expires in", res.data.expires_in, "seconds");
-  return _accessToken;
-}
-
-async function sheetsApi(method, path, body) {
-  var token = await getAccessToken();
-  var url = "https://sheets.googleapis.com/v4/spreadsheets/" + SPREADSHEET_ID + path;
-  var bodyStr = body ? JSON.stringify(body) : null;
-  var opts = {
-    method: method,
-    headers: {
-      "Authorization": "Bearer " + token,
-      "Content-Type": "application/json",
+  // Sample articles
+  var articles = [
+    {
+      title: "MAN 2 Palembang Raih Juara 1 Lomba KSM Tingkat Provinsi",
+      slug: "man2-palembang-raih-juara-1-lomba-ksm",
+      content: "<p>Dengan bangga kami sampaikan bahwa MAN 2 Palembang berhasil meraih Juara 1 dalam Lomba Kompetisi Sains Madrasah (KSM) tingkat Provinsi Sumatera Selatan tahun 2024.</p><p>Prestasi ini diraih oleh tiga siswa terbaik kami:</p><ul><li><strong>Muhammad Rizki Pratama</strong> — Juara 1 Matematika Terintegrasi</li><li><strong>Aisha Putri Ramadhani</strong> — Juara 1 Fisika</li><li><strong>Fajar Nugroho</strong> — Juara 2 Kimia</li></ul><p>Kepala MAN 2 Palembang, Bapak Dr. H. Muhammad Syukri, M.Pd., menyampaikan apresiasi yang tinggi atas kerja keras seluruh siswa dan pembimbing.</p><p>Selamat kepada seluruh siswa yang telah berjuang! Semoga prestasi ini menjadi motivasi bagi seluruh warga madrasah.</p>",
+      excerpt: "MAN 2 Palembang berhasil meraih Juara 1 dalam Lomba KSM tingkat Provinsi Sumatera Selatan.",
+      category_id: 5,
+      is_featured: 1,
+      is_pinned: 1,
+      views: 245
     },
-  };
-  if (bodyStr) opts.headers["Content-Length"] = Buffer.byteLength(bodyStr);
-  var res = await httpsRequest(url, opts, bodyStr);
-  if (res.status === 401) {
-    _accessToken = null;
-    _tokenExpiry = 0;
-    token = await getAccessToken();
-    opts.headers["Authorization"] = "Bearer " + token;
-    res = await httpsRequest(url, opts, bodyStr);
-  }
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error("Sheets API error (HTTP " + res.status + "): " + JSON.stringify(res.data));
-  }
-  return res.data;
-}
-
-// --- Sheet config ---
-var SHEETS = {
-  USERS: "Users",
-  SUBJECTS: "Subjects",
-  EXAMS: "Exams",
-  ATTEMPTS: "Attempts",
-};
-
-var HEADERS = {};
-HEADERS[SHEETS.USERS] = ["id", "name", "username", "password_hash", "role", "created_at"];
-HEADERS[SHEETS.SUBJECTS] = ["id", "name", "description", "created_by", "created_at"];
-HEADERS[SHEETS.EXAMS] = ["id", "title", "subject_id", "description", "google_form_url", "duration_minutes", "is_active", "starts_at", "ends_at", "created_by", "created_at"];
-HEADERS[SHEETS.ATTEMPTS] = ["id", "exam_id", "student_id", "status", "started_at", "ends_at", "completed_at", "violation_count", "violations"];
-
-// --- Retry helper for transient Google Sheets errors ---
-async function withRetry(fn, maxRetries, delay) {
-  maxRetries = maxRetries || 2;
-  delay = delay || 500;
-  for (var attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (attempt === maxRetries) throw err;
-      var status = err && err.status;
-      var isTransient = !status || status === 429 || (status >= 500 && status < 600);
-      if (!isTransient) throw err;
-      console.warn("[UjianKita] Retry " + (attempt + 1) + "/" + maxRetries + " after error:", (err && err.message) || err);
-      await new Promise(function (resolve) { setTimeout(resolve, delay * Math.pow(2, attempt)); });
+    {
+      title: "Pengumuman Jadwal Ujian Akhir Semester Ganjil 2024/2025",
+      slug: "pengumuman-jadwal-uas-ganjil-2024",
+      content: "<p>Berdasarkan surat edaran Kepala Madrasah nomor 001/UAS/GANJIL/2024, dengan ini diumumkan jadwal Ujian Akhir Semester (UAS) Ganjil tahun pelajaran 2024/2025:</p><h3>Jadwal Pelaksanaan</h3><table><thead><tr><th>Tanggal</th><th>Hari</th><th>Mata Pelajaran</th></tr></thead><tbody><tr><td>16-17 Desember 2024</td><td>Senin-Selasa</td><td>Bidang Studi Umum</td></tr><tr><td>18-19 Desember 2024</td><td>Rabu-Kamis</td><td>Bidang Studi Keagamaan</td></tr><tr><td>20 Desember 2024</td><td>Jumat</td><td>Bidang Studi Pilihan</td></tr></tbody></table><h3>Ketentuan</h3><ul><li>Seluruh siswa wajib hadir 15 menit sebelum ujian dimulai</li><li>Membawa alat tulis dan kartu ujian</li><li>Dilarang membawa alat bantu elektronik</li><li>Bagi yang berhalangan hadir, wajib melapor ke Wali Kelas</li></ul><p>Semoga seluruh siswa dapat mengerjakan ujian dengan baik dan mendapatkan hasil yang maksimal.</p>",
+      excerpt: "Diinformasikan jadwal Ujian Akhir Semester Ganjil tahun pelajaran 2024/2025.",
+      category_id: 2,
+      is_featured: 1,
+      is_pinned: 0,
+      views: 189
+    },
+    {
+      title: "Peringatan Maulid Nabi Muhammad SAW 1446 H",
+      slug: "peringatan-maulid-nabi-1446h",
+      content: "<p>MAN 2 Palembang mengadakan peringatan Maulid Nabi Muhammad SAW 1446 H dengan tema <strong>'Meneladani Akhlak Rasulullah SAW dalam Membangun Generasi Emas'</strong>.</p><p>Kegiatan ini dihadiri oleh seluruh dewan guru, staff tata userta, dan siswa-siswi MAN 2 Palembang. Acara diisi dengan:</p><ul><li>Pembacaan Maulid Diba'</li><li>Ceramah agama oleh Ustadz Dr. KH. Ahmad Darwis, M.Ag.</li><li>Paduan suara Mars Madrasah</li><li>Penampilan seniIslami dari siswa</li></ul><p>Acara berlangsung khidmat dan penuh keberkahan. Semoga peringatan ini menjadi moment untuk lebih mendekatkan diri kepada Allah SWT.</p>",
+      excerpt: "MAN 2 Palembang mengadakan peringatan Maulid Nabi Muhammad SAW 1446 H.",
+      category_id: 3,
+      is_featured: 0,
+      is_pinned: 0,
+      views: 156
+    },
+    {
+      title: "Program Tahfidz Qur'an MAN 2 Palembang Targetkan 30 Juz",
+      slug: "program-tahfidz-quran-target-30-juz",
+      content: "<p>MAN 2 Palembang meluncurkan Program Tahfidz Qur'an dengan target hafalan 30 Juz bagi seluruh siswa selama masa pendidikan 3 tahun.</p><p>Program ini merupakan bagian dari visi madrasah untuk mencetak generasi Qur'ani yang unggul dalam bidang akademik dan religius.</p><h3>Struktur Program</h3><ul><li><strong>Tahun Pertama</strong>: Juz 1-10</li><li><strong>Tahun Kedua</strong>: Juz 11-20</li><li><strong>Tahun Ketiga</strong>: Juz 21-30</li></ul><p>Setiap siswa akan mendapatkan bimbingan intensif dari ustadz/ustadzah yang qualified. Monitoring hafalan dilakukan setiap minggu.</p>",
+      excerpt: "MAN 2 Palembang meluncurkan Program Tahfidz Qur'an target 30 Juz.",
+      category_id: 4,
+      is_featured: 1,
+      is_pinned: 0,
+      views: 132
+    },
+    {
+      title: "Kurikulum Merdeka: Implementasi dan Penguatan di MAN 2 Palembang",
+      slug: "kurikulum-merdeka-implementasi",
+      content: "<p>MAN 2 Palembang telah melakukan implementasi Kurikulum Merdeka secara bertahap sejak tahun pelajaran 2023/2024. Berikut adalah capaian dan langkah penguatan yang telah dilakukan:</p><h3>Capaian Implementasi</h3><ul><li>Proyek Penguatan Profil Pelajar Pancasila (P5) telah terlaksana</li><li>Asesmen diagnostik untuk setiap siswa baru</li><li>Pembelajaran berbasis proyek di semua jenjang</li></ul><h3>Penguatan</h3><p>Tahun ini, kami melakukan penguatan melalui:</p><ul><li>Pelatihan guru tentang Asesmen Autentik</li><li>Pengembangan modul P5 yang kontekstual</li><li>Penguatan Literasi dan Numerasi (Linur)</li></ul>",
+      excerpt: "Capaian implementasi Kurikulum Merdeka di MAN 2 Palembang.",
+      category_id: 4,
+      is_featured: 0,
+      is_pinned: 0,
+      views: 98
+    },
+    {
+      title: "MAN 2 Palembang Juara 2 Bidang Keagamaan di Muktamar Sains Madrasah",
+      slug: "juara-2-muktamar-sains-madrasah",
+      content: "<p>Siswa MAN 2 Palembang kembali mengharumkan nama madrasah di tingkat nasional. Dalam Muktamar Sains Madrasah ke-8 yang diselenggarakan di Jakarta, delegation kami berhasil meraih Juara 2 Bidang Keagamaan.</p><p>Prestasi ini menjadi bukti bahwa MAN 2 Palembang mampu bersaing di tingkat nasional dalam bidang sains dan keagamaan.</p>",
+      excerpt: "Siswa MAN 2 Palembang meraih Juara 2 di Muktamar Sains Madrasah tingkat nasional.",
+      category_id: 5,
+      is_featured: 0,
+      is_pinned: 0,
+      views: 87
+    },
+    {
+      title: " Jadwal Ekstrakurikuler Semester Ganjil 2024/2025",
+      slug: "jadwal-ekskul-semester-ganjil",
+      content: "<p>Berikut jadwal kegiatan ekstrakurikuler semester ganjil 2024/2025:</p><ul><li><strong>Robotic Club</strong> — Senin & Rabu, 15.30-17.00</li><li><strong>English Club</strong> — Selasa & Kamis, 15.30-17.00</li><li><strong>PMR (Palang Merah Remaja)</strong> — Rabu, 15.30-17.00</li><li><strong>Bucketball</strong> — Kamis, 15.30-17.00</li><li><strong>Hadroh & Rebana</strong> — Jumat, 15.30-17.00</li><li><strong>Olahraga (Bulutangkis, Futsal, Basket)</strong> — Senin-Jumat, 06.30-07.30</li></ul><p>Pendaftaran dibuka mulai tanggal 15 Juli 2024 di Ruang OSIS.</p>",
+      excerpt: "Jadwal kegiatan ekstrakurikuler semester ganjil 2024/2025.",
+      category_id: 6,
+      is_featured: 0,
+      is_pinned: 0,
+      views: 112
+    },
+    {
+      title: "Infografis: Profil MAN 2 Palembang Tahun 2024",
+      slug: "infografis-profil-man2-2024",
+      content: "<p>Berikut infografis profil MAN 2 Palembang tahun 2024:</p><ul><li><strong>Jumlah Siswa</strong>: 1.250 siswa</li><li><strong>Jumlah Guru</strong>: 85 guru</li><li><strong>Rasio Guru-Siswa</strong>: 1:15</li><li><strong>Rata-rata Nilai UN</strong>: 87.5</li><li><strong>Tingkat Kelulusan</strong>: 100%</li><li><strong>Jumlah Program Unggulan</strong>: 5 program</li></ul><p>MAN 2 Palembang terus berkomitmen untuk memberikan pendidikan terbaik bagi seluruh siswa.</p>",
+      excerpt: "Infografis profil lengkap MAN 2 Palembang tahun 2024.",
+      category_id: 7,
+      is_featured: 0,
+      is_pinned: 0,
+      views: 76
     }
-  }
-}
+  ];
 
-// --- Sheet helpers ---
-async function readSheet(sheetName) {
-  return withRetry(async function () {
-    var data = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
-    var rows = data.values || [];
-    if (rows.length < 2) return [];
-    var headers = rows[0];
-    return rows.slice(1).map(function (row) {
-      var obj = {};
-      headers.forEach(function (h, i) { obj[h] = (row[i] || "").trim(); });
-      return obj;
-    });
-  }, 2, 500);
-}
+  var insertArticle = db.prepare(`INSERT INTO articles (title, slug, content, excerpt, category_id, author_id, status, views, is_featured, is_pinned, published_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'published', ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`);
 
-async function findByField(sheetName, field, value) {
-  var rows = await readSheet(sheetName);
-  return rows.find(function (r) { return r[field] === value; }) || null;
-}
-
-async function addRow(sheetName, data) {
-  var headers = HEADERS[sheetName];
-  if (!headers) throw new Error("Unknown sheet: " + sheetName);
-  var row = headers.map(function (h) { return data[h] || ""; });
-  await sheetsApi("POST", "/values/" + sheetName + "!A:Z:append?valueInputOption=RAW", {
-    values: [row],
+  articles.forEach(function(a) {
+    insertArticle.run(a.title, a.slug, a.content, a.excerpt, a.category_id, 1, a.views, a.is_featured, a.is_pinned);
   });
+
+  // Sample announcements
+  var insertAnn = db.prepare("INSERT INTO announcements (title, content, is_active, priority, created_by) VALUES (?, ?, 1, ?, 1)");
+  insertAnn.run("Libur Semester Ganjil", "MAN 2 Palembang akan melaksanakan libur semester ganjil mulai tanggal 21 Desember 2024 hingga 4 Januari 2025. Kegiatan belajar mengajar akan dimulai kembali pada tanggal 6 Januari 2025.", "high");
+  insertAnn.run("Pembayaran SPP Januari 2025", "Bagi orang tua/wali siswa, pembayaran SPP untuk bulan Januari 2025 sudah dapat dilakukan mulai tanggal 2 Januari 2025 di bagian TU.", "normal");
+
+  // Sample tags
+  var tags = [
+    { name: "Prestasi", slug: "prestasi" },
+    { name: "KSM", slug: "ksm" },
+    { name: "Ujian", slug: "ujian" },
+    { name: "Maulid", slug: "maulid" },
+    { name: "Tahfidz", slug: "tahfidz" },
+    { name: "Kurikulum Merdeka", slug: "kurikulum-merdeka" },
+    { name: "Ekstrakurikuler", slug: "ekskul" },
+    { name: "Madrasah", slug: "madrasah" },
+  ];
+  var insertTag = db.prepare("INSERT INTO tags (name, slug) VALUES (?, ?)");
+  tags.forEach(function(t) { insertTag.run(t.name, t.slug); });
+
+  // Sample sliders
+  var insertSlider = db.prepare("INSERT INTO sliders (title, subtitle, image, link, sort_order, is_active) VALUES (?, ?, ?, ?, ?, 1)");
+  insertSlider.run("Selamat Datang di MAN 2 Palembang", "Madrasah Unggul, Berprestasi, dan Berkarakter", "", "/berita", 1);
+  insertSlider.run("Pendaftaran Siswa Baru 2025/2026", "Sudah dibuka! Daftarkan putra-putri Anda sekarang", "", "/pengumuman", 2);
+
+  // Page settings
+  var insertSetting = db.prepare("INSERT OR REPLACE INTO page_settings (key, value) VALUES (?, ?)");
+  insertSetting.run("school_name", "MAN 2 Palembang");
+  insertSetting.run("school_motto", "Unggul dalam Prestasi, Berkarakter Islam");
+  insertSetting.run("school_address", "Jl. Demang Lebar Daun No. 1, Palembang, Sumatera Selatan");
+  insertSetting.run("school_phone", "(0711) 123456");
+  insertSetting.run("school_email", "info@man2palembang.sch.id");
+  insertSetting.run("school_website", "https://man2palembang.sch.id");
+  insertSetting.run("footer_text", "© 2024 MAN 2 Palembang. Hak Cipta Dilindungi.");
+
+  console.log("[Portal] Seed data inserted successfully.");
 }
 
-async function updateRow(sheetName, id, data) {
-  var headers = HEADERS[sheetName];
-  if (!headers) throw new Error("Unknown sheet: " + sheetName);
-  var data2 = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
-  var rows = data2.values || [];
-  var idIdx = headers.indexOf("id");
-  for (var i = 1; i < rows.length; i++) {
-    if (rows[i][idIdx] === id) {
-      var updated = headers.map(function (h) { return data[h] !== undefined ? data[h] : (rows[i][headers.indexOf(h)] || ""); });
-      await sheetsApi("PUT", "/values/" + sheetName + "!A" + (i + 1) + ":Z" + (i + 1) + "?valueInputOption=RAW", {
-        values: [updated],
-      });
-      return true;
-    }
-  }
-  return false;
-}
-
-async function deleteRow(sheetName, id) {
-  var headers = HEADERS[sheetName];
-  if (!headers) throw new Error("Unknown sheet: " + sheetName);
-  var data = await sheetsApi("GET", "/values/" + sheetName + "!A:Z");
-  var rows = data.values || [];
-  var idIdx = headers.indexOf("id");
-  var trimmedId = (id || "").trim();
-  for (var i = 1; i < rows.length; i++) {
-    var rowId = (rows[i][idIdx] || "").trim();
-    if (rowId === trimmedId) {
-      var meta = await sheetsApi("GET", "");
-      var sheet = (meta.sheets || []).find(function (s) { return s.properties && s.properties.title === sheetName; });
-      var sheetId = (sheet && sheet.properties && sheet.properties.sheetId) || 0;
-      await sheetsApi("POST", ":batchUpdate", {
-        requests: [{ deleteDimension: { range: { sheetId: sheetId, dimension: "ROWS", startIndex: i, endIndex: i + 1 } } }],
-      });
-      return true;
-    }
-  }
-  return false;
-}
+// ============================================================
+//  HELPERS
+// ============================================================
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
 }
 
-// --- Auth helpers ---
-var bcrypt = require("bcryptjs");
-var jwt = require("jsonwebtoken");
-var JWT_SECRET = process.env.JWT_SECRET || "ujiankita-secret-change-in-production";
-
-async function hashPassword(pw) { return bcrypt.hash(pw, 10); }
-async function verifyPassword(pw, hash) { return bcrypt.compare(pw, hash); }
-function generateToken(payload) { return jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" }); }
-function verifyToken(token) {
-  try { return jwt.verify(token, JWT_SECRET); } catch (_e) { return null; }
+function slugify(text) {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/[\s_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
-// --- Auth middleware ---
+function generateToken(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
+}
+
+function verifyToken(token) {
+  try { return jwt.verify(token, JWT_SECRET); } catch (e) { return null; }
+}
+
 function authenticate(req, res, next) {
   var authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return res.status(401).json({ error: "Token autentikasi diperlukan" });
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Token autentikasi diperlukan" });
+  }
   var payload = verifyToken(authHeader.substring(7));
-  if (!payload) return res.status(401).json({ error: "Token tidak valid atau sudah kedaluwarsa" });
+  if (!payload) {
+    return res.status(401).json({ error: "Token tidak valid atau sudah kedaluwarsa" });
+  }
   req.user = payload;
   next();
 }
 
+function optionalAuth(req, res, next) {
+  var authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    var payload = verifyToken(authHeader.substring(7));
+    if (payload) req.user = payload;
+  }
+  next();
+}
+
 function requireRole(roles) {
-  return function (req, res, next) {
+  return function(req, res, next) {
     if (!req.user) return res.status(401).json({ error: "Belum masuk" });
     if (roles.indexOf(req.user.role) === -1) return res.status(403).json({ error: "Akses ditolak" });
     next();
   };
+}
+
+function logActivity(userId, action, entityType, entityId, details) {
+  try {
+    db.prepare("INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details) VALUES (?, ?, ?, ?, ?)").run(
+      userId, action, entityType || null, entityId || null, details || ""
+    );
+  } catch (e) { /* silent */ }
 }
 
 // ============================================================
@@ -452,502 +388,733 @@ function requireRole(roles) {
 // ============================================================
 
 // --- HEALTH CHECK ---
-app.get("/api/health", function (_req, res) {
-  res.json({ status: "ok", timestamp: Date.now(), port: PORT, node: process.version });
+app.get("/api/health", function(_req, res) {
+  res.json({ status: "ok", timestamp: Date.now(), port: PORT, node: process.version, db: "sqlite" });
 });
 
-// --- DEBUG: Google Sheets diagnostic ---
-app.get("/api/debug/sheets", async function (_req, res) {
-  var result = { steps: [], node: process.version, ts: new Date().toISOString() };
+// ============================================================
+//  AUTH ROUTES
+// ============================================================
+
+app.post("/api/auth/bootstrap-admin", async function(req, res) {
   try {
-    var keyInfo = {};
-    if (SA_KEY) {
-      keyInfo = {
-        keyLength: SA_KEY.length,
-        keyFormat: SA_KEY.indexOf("-----BEGIN PRIVATE KEY-----") === 0 ? "PKCS8" : SA_KEY.indexOf("-----BEGIN RSA PRIVATE KEY-----") === 0 ? "PKCS1" : "UNKNOWN",
-        keySource: process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? "JSON" : process.env.GOOGLE_PRIVATE_KEY_B64 ? "B64" : process.env.GOOGLE_PRIVATE_KEY ? "RAW" : "NONE",
-        hasKeyObject: !!SA_KEY_OBJ,
-        firstChars: SA_KEY.substring(0, 30),
-        lastChars: SA_KEY.substring(SA_KEY.length - 30),
-        lineCount: SA_KEY.split("\n").length,
-      };
-    } else {
-      keyInfo = { keyLength: 0, keyFormat: "NONE", keySource: "NONE", hasKeyObject: false };
-    }
+    var adminExists = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get().count;
+    if (adminExists > 0) return res.status(400).json({ error: "Akun admin sudah ada" });
 
-    // Step 1: Env check
-    result.steps.push({ name: "env_check", ok: true, data: Object.assign({
-      hasSpreadsheetId: !!SPREADSHEET_ID,
-      hasServiceAccountEmail: !!SA_EMAIL,
-    }, keyInfo) });
-
-    // Step 2: Key parse
-    try {
-      if (!SA_KEY_OBJ) throw new Error("No key object available");
-      result.steps.push({ name: "key_parse", ok: true, data: { type: SA_KEY_OBJ.type, bits: SA_KEY_OBJ.asymmetricKeySize } });
-    } catch (e) {
-      result.steps.push({ name: "key_parse", ok: false, error: e.message });
-    }
-
-    // Step 3: JWT sign
-    try {
-      var testJwt = await createSignedJwt();
-      result.steps.push({ name: "jwt_sign", ok: true, data: { jwtLength: testJwt.length } });
-    } catch (e) {
-      result.steps.push({ name: "jwt_sign", ok: false, error: e.message });
-    }
-
-    // Step 4: Access token
-    try {
-      var at = await getAccessToken();
-      result.steps.push({ name: "access_token", ok: true, data: { tokenLength: at.length } });
-    } catch (e) {
-      result.steps.push({ name: "access_token", ok: false, error: e.message });
-    }
-
-    // Step 5: Spreadsheet access
-    try {
-      var meta = await sheetsApi("GET", "");
-      var titles = (meta.sheets || []).map(function (s) { return s.properties && s.properties.title; });
-      result.steps.push({ name: "spreadsheet_access", ok: true, data: { title: meta.properties && meta.properties.title, sheets: titles } });
-    } catch (e) {
-      result.steps.push({ name: "spreadsheet_access", ok: false, error: e.message });
-    }
-
-    // Step 6: Read Users
-    try {
-      var users = await readSheet(SHEETS.USERS);
-      result.steps.push({ name: "read_users", ok: true, data: { count: users.length, roles: users.map(function (u) { return u.role; }) } });
-    } catch (e) {
-      result.steps.push({ name: "read_users", ok: false, error: e.message });
-    }
-
-  } catch (e) {
-    result.error = e.message;
-  }
-  res.json(result);
-});
-
-// --- AUTH: Bootstrap admin (first-run) ---
-app.post("/api/auth/bootstrap-admin", async function (req, res) {
-  try {
-    var users = await readSheet(SHEETS.USERS);
-    if (users.find(function (u) { return u.role === "admin"; })) return res.status(400).json({ error: "Akun admin sudah ada" });
     var name = req.body && req.body.name;
     var username = req.body && req.body.username;
     var password = req.body && req.body.password;
     if (!name || !username || !password) return res.status(400).json({ error: "Nama, username, dan password diperlukan" });
     if (password.length < 8) return res.status(400).json({ error: "Password minimal 8 karakter" });
-    if (!/^[a-z0-9_.-]{3,32}$/.test(username)) return res.status(400).json({ error: "Username harus 3-32 karakter (huruf kecil, angka, . _ -)" });
-    if (await findByField(SHEETS.USERS, "username", username)) return res.status(400).json({ error: "Username sudah dipakai" });
-    await addRow(SHEETS.USERS, { id: generateId(), name: name.trim() || username, username: username, password_hash: await hashPassword(password), role: "admin", created_at: new Date().toISOString() });
+
+    var hash = bcrypt.hashSync(password, 10);
+    db.prepare("INSERT INTO users (name, username, password_hash, role) VALUES (?, ?, ?, 'admin')").run(name.trim(), username, hash);
     res.json({ message: "Akun admin berhasil dibuat" });
-  } catch (e) { console.error("[UjianKita] Bootstrap error:", e.message); res.status(500).json({ error: "Gagal membuat akun admin: " + e.message }); }
-});
-
-// --- AUTH: Reset admin ---
-app.post("/api/auth/reset-admin", async function (req, res) {
-  try {
-    var resetKey = process.env.ADMIN_RESET_KEY;
-    if (!resetKey) return res.status(403).json({ error: "Fitur reset admin tidak aktif" });
-    var resetToken = req.body && req.body.resetToken;
-    var newPassword = req.body && req.body.newPassword;
-    var newUsername = req.body && req.body.newUsername;
-    if (!resetToken || resetToken !== resetKey) return res.status(401).json({ error: "Reset token salah" });
-    if (!newPassword || newPassword.length < 8) return res.status(400).json({ error: "Password baru minimal 8 karakter" });
-    var users = await readSheet(SHEETS.USERS);
-    var admin = users.find(function (u) { return u.role === "admin"; });
-    if (!admin) {
-      var uname = newUsername || "admin";
-      if (!/^[a-z0-9_.-]{3,32}$/.test(uname)) return res.status(400).json({ error: "Username harus 3-32 karakter" });
-      await addRow(SHEETS.USERS, { id: generateId(), name: "Admin", username: uname, password_hash: await hashPassword(newPassword), role: "admin", created_at: new Date().toISOString() });
-      return res.json({ message: "Akun admin berhasil dibuat", username: uname });
-    }
-    var updates = { password_hash: await hashPassword(newPassword) };
-    if (newUsername && newUsername !== admin.username) {
-      if (!/^[a-z0-9_.-]{3,32}$/.test(newUsername)) return res.status(400).json({ error: "Username harus 3-32 karakter" });
-      if (await findByField(SHEETS.USERS, "username", newUsername)) return res.status(400).json({ error: "Username sudah dipakai" });
-      updates.username = newUsername;
-    }
-    await updateRow(SHEETS.USERS, admin.id, updates);
-    res.json({ message: "Admin berhasil direset", username: updates.username || admin.username });
-  } catch (e) { console.error("[UjianKita] Reset error:", e.message); res.status(500).json({ error: "Gagal mereset admin: " + e.message }); }
-});
-
-// --- AUTH: Has admin ---
-app.get("/api/auth/has-admin", async function (_req, res) {
-  try {
-    var users = await readSheet(SHEETS.USERS);
-    res.json({ hasAdmin: users.some(function (u) { return u.role === "admin"; }) });
   } catch (e) {
-    console.error("[UjianKita] has-admin error:", e.message);
-    res.status(500).json({ hasAdmin: null, error: "Gagal terhubung ke Google Sheets: " + e.message });
+    if (e.message && e.message.includes("UNIQUE")) return res.status(400).json({ error: "Username sudah dipakai" });
+    res.status(500).json({ error: "Gagal membuat akun admin" });
   }
 });
 
-// --- AUTH: Current user ---
-app.get("/api/auth/me", authenticate, async function (req, res) {
-  try {
-    var user = await findByField(SHEETS.USERS, "id", req.user.userId);
-    if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
-    res.json({ id: user.id, name: user.name, username: user.username, role: user.role });
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data" }); }
+app.get("/api/auth/has-admin", function(_req, res) {
+  var count = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'admin'").get().count;
+  res.json({ hasAdmin: count > 0 });
 });
 
-// --- AUTH: Update profile ---
-app.put("/api/auth/me", authenticate, async function (req, res) {
-  try {
-    var name = req.body && req.body.name;
-    var username = req.body && req.body.username;
-    if (!name && !username) return res.status(400).json({ error: "Tidak ada data yang diubah" });
-    var user = await findByField(SHEETS.USERS, "id", req.user.userId);
-    if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
-    var updates = {};
-    if (name) updates.name = name;
-    if (username && username !== user.username) {
-      if (!/^[a-z0-9_.-]{3,32}$/.test(username)) return res.status(400).json({ error: "Username harus 3-32 karakter" });
-      if (await findByField(SHEETS.USERS, "username", username)) return res.status(400).json({ error: "Username sudah dipakai" });
-      updates.username = username;
-    }
-    await updateRow(SHEETS.USERS, user.id, updates);
-    // If username changed, issue new token
-    if (updates.username) {
-      var newToken = generateToken({ userId: user.id, username: updates.username, role: user.role });
-      return res.json({ message: "Profil diperbarui", token: newToken });
-    }
-    res.json({ message: "Profil diperbarui" });
-  } catch (e) { res.status(500).json({ error: "Gagal memperbarui profil" }); }
-});
-
-// --- AUTH: Login ---
-app.post("/api/auth/login", async function (req, res) {
+app.post("/api/auth/login", function(req, res) {
   try {
     var username = req.body && req.body.username;
     var password = req.body && req.body.password;
     if (!username || !password) return res.status(400).json({ error: "Username dan password diperlukan" });
-    var user = await findByField(SHEETS.USERS, "username", username);
+
+    var user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
     if (!user) return res.status(401).json({ error: "Username atau password salah" });
-    var ok = await verifyPassword(password, user.password_hash);
-    if (!ok) return res.status(401).json({ error: "Username atau password salah" });
+
+    if (!bcrypt.compareSync(password, user.password_hash)) {
+      return res.status(401).json({ error: "Username atau password salah" });
+    }
+
     var token = generateToken({ userId: user.id, username: user.username, role: user.role });
-    res.json({ token: token, user: { id: user.id, name: user.name, username: user.username, role: user.role } });
-  } catch (e) { res.status(500).json({ error: "Gagal melakukan login" }); }
+    logActivity(user.id, "login", "user", user.id, "Login berhasil");
+    res.json({
+      token: token,
+      user: { id: user.id, name: user.name, username: user.username, role: user.role, avatar: user.avatar, bio: user.bio }
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal melakukan login" });
+  }
 });
 
-// --- AUTH: Change password ---
-app.post("/api/auth/change-password", authenticate, async function (req, res) {
+app.get("/api/auth/me", authenticate, function(req, res) {
+  var user = db.prepare("SELECT id, name, username, role, avatar, bio, nip, nisn, class_name, created_at FROM users WHERE id = ?").get(req.user.userId);
+  if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+  res.json(user);
+});
+
+app.put("/api/auth/me", authenticate, function(req, res) {
+  var name = req.body && req.body.name;
+  var username = req.body && req.body.username;
+  if (!name && !username) return res.status(400).json({ error: "Tidak ada data yang diubah" });
+
+  var user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.userId);
+  if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+
   try {
-    var currentPassword = req.body && req.body.currentPassword;
-    var newPassword = req.body && req.body.newPassword;
-    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Password lama dan baru diperlukan" });
-    if (newPassword.length < 8) return res.status(400).json({ error: "Password baru minimal 8 karakter" });
-    var user = await findByField(SHEETS.USERS, "id", req.user.userId);
-    if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
-    var ok = await verifyPassword(currentPassword, user.password_hash);
-    if (!ok) return res.status(401).json({ error: "Password lama salah" });
-    await updateRow(SHEETS.USERS, user.id, { password_hash: await hashPassword(newPassword) });
-    res.json({ message: "Password berhasil diubah" });
-  } catch (e) { res.status(500).json({ error: "Gagal mengubah password" }); }
+    if (name) db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, req.user.userId);
+    if (username && username !== user.username) {
+      var exists = db.prepare("SELECT id FROM users WHERE username = ? AND id != ?").get(username, req.user.userId);
+      if (exists) return res.status(400).json({ error: "Username sudah dipakai" });
+      db.prepare("UPDATE users SET username = ? WHERE id = ?").run(username, req.user.userId);
+    }
+    res.json({ message: "Profil diperbarui" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal memperbarui profil" });
+  }
+});
+
+app.post("/api/auth/change-password", authenticate, function(req, res) {
+  var currentPassword = req.body && req.body.currentPassword;
+  var newPassword = req.body && req.body.newPassword;
+  if (!currentPassword || !newPassword) return res.status(400).json({ error: "Password lama dan baru diperlukan" });
+  if (newPassword.length < 8) return res.status(400).json({ error: "Password baru minimal 8 karakter" });
+
+  var user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.userId);
+  if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+  if (!bcrypt.compareSync(currentPassword, user.password_hash)) {
+    return res.status(401).json({ error: "Password lama salah" });
+  }
+
+  var hash = bcrypt.hashSync(newPassword, 10);
+  db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hash, req.user.userId);
+  res.json({ message: "Password berhasil diubah" });
 });
 
 // ============================================================
 //  USERS (admin)
 // ============================================================
 
-app.get("/api/users", authenticate, requireRole(["admin"]), async function (_req, res) {
-  try {
-    var users = await readSheet(SHEETS.USERS);
-    res.json(users.map(function (u) {
-      return { id: u.id, name: u.name, username: u.username, role: u.role, created_at: u.created_at };
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar pengguna" }); }
+app.get("/api/users", authenticate, requireRole(["admin"]), function(_req, res) {
+  var users = db.prepare("SELECT id, name, username, role, avatar, nip, nisn, class_name, created_at FROM users ORDER BY created_at DESC").all();
+  res.json(users);
 });
 
-app.post("/api/users", authenticate, requireRole(["admin"]), async function (req, res) {
+app.post("/api/users", authenticate, requireRole(["admin"]), function(req, res) {
   try {
-    var name = req.body && req.body.name;
-    var username = req.body && req.body.username;
-    var password = req.body && req.body.password;
-    var role = req.body && req.body.role;
-    if (!name || !username || !password || !role) return res.status(400).json({ error: "Nama, username, password, dan role diperlukan" });
+    var { name, username, password, role, nip, nisn, class_name } = req.body;
+    if (!name || !username || !password) return res.status(400).json({ error: "Nama, username, dan password diperlukan" });
     if (password.length < 8) return res.status(400).json({ error: "Password minimal 8 karakter" });
-    if (!/^[a-z0-9_.-]{3,32}$/.test(username)) return res.status(400).json({ error: "Username harus 3-32 karakter (huruf kecil, angka, . _ -)" });
-    if (role !== "student" && role !== "teacher") return res.status(400).json({ error: "Role harus 'student' atau 'teacher'" });
-    if (await findByField(SHEETS.USERS, "username", username)) return res.status(400).json({ error: "Username sudah dipakai" });
-    await addRow(SHEETS.USERS, { id: generateId(), name: name.trim() || username, username: username, password_hash: await hashPassword(password), role: role, created_at: new Date().toISOString() });
-    res.json({ message: "Akun berhasil dibuat" });
-  } catch (e) { res.status(500).json({ error: "Gagal membuat akun: " + e.message }); }
+    if (!role) role = "student";
+
+    var hash = bcrypt.hashSync(password, 10);
+    var result = db.prepare("INSERT INTO users (name, username, password_hash, role, nip, nisn, class_name) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+      name.trim(), username, hash, role, nip || "", nisn || "", class_name || ""
+    );
+    logActivity(req.user.userId, "create_user", "user", result.lastInsertRowid, "Membuat user: " + username);
+    res.json({ message: "Akun berhasil dibuat", id: result.lastInsertRowid });
+  } catch (e) {
+    if (e.message && e.message.includes("UNIQUE")) return res.status(400).json({ error: "Username sudah dipakai" });
+    res.status(500).json({ error: "Gagal membuat akun: " + e.message });
+  }
 });
 
-app.delete("/api/users/:id", authenticate, requireRole(["admin"]), async function (req, res) {
+app.put("/api/users/:id", authenticate, requireRole(["admin"]), function(req, res) {
   try {
-    var user = await findByField(SHEETS.USERS, "id", req.params.id);
+    var { name, username, role, nip, nisn, class_name, password } = req.body;
+    var user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
+    if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+
+    var updates = [];
+    var params = [];
+    if (name) { updates.push("name = ?"); params.push(name); }
+    if (username && username !== user.username) {
+      var exists = db.prepare("SELECT id FROM users WHERE username = ? AND id != ?").get(username, req.params.id);
+      if (exists) return res.status(400).json({ error: "Username sudah dipakai" });
+      updates.push("username = ?"); params.push(username);
+    }
+    if (role) { updates.push("role = ?"); params.push(role); }
+    if (nip !== undefined) { updates.push("nip = ?"); params.push(nip); }
+    if (nisn !== undefined) { updates.push("nisn = ?"); params.push(nisn); }
+    if (class_name !== undefined) { updates.push("class_name = ?"); params.push(class_name); }
+    if (password && password.length >= 8) {
+      updates.push("password_hash = ?"); params.push(bcrypt.hashSync(password, 10));
+    }
+
+    if (updates.length === 0) return res.status(400).json({ error: "Tidak ada data yang diubah" });
+    params.push(req.params.id);
+    db.prepare("UPDATE users SET " + updates.join(", ") + " WHERE id = ?").run(...params);
+    res.json({ message: "Pengguna berhasil diperbarui" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal memperbarui pengguna" });
+  }
+});
+
+app.delete("/api/users/:id", authenticate, requireRole(["admin"]), function(req, res) {
+  try {
+    var user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id);
     if (!user) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
     if (user.role === "admin") return res.status(403).json({ error: "Tidak dapat menghapus akun admin" });
-    var deleted = await deleteRow(SHEETS.USERS, req.params.id);
-    if (!deleted) return res.status(404).json({ error: "Pengguna tidak ditemukan di spreadsheet" });
+
+    db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+    logActivity(req.user.userId, "delete_user", "user", req.params.id, "Menghapus user: " + user.username);
     res.json({ message: "Akun berhasil dihapus" });
-  } catch (e) { res.status(500).json({ error: "Gagal menghapus akun: " + e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: "Gagal menghapus akun" });
+  }
 });
 
-app.post("/api/users/import", authenticate, requireRole(["admin"]), async function (req, res) {
+// ============================================================
+//  CATEGORIES
+// ============================================================
+
+app.get("/api/categories", function(_req, res) {
+  var categories = db.prepare("SELECT c.*, (SELECT COUNT(*) FROM articles WHERE category_id = c.id AND status = 'published') as article_count FROM categories c ORDER BY c.sort_order ASC, c.name ASC").all();
+  res.json(categories);
+});
+
+app.post("/api/categories", authenticate, requireRole(["admin"]), function(req, res) {
   try {
-    var role = req.body && req.body.role;
-    var items = req.body && req.body.items;
-    if (!role || !Array.isArray(items) || items.length === 0) return res.status(400).json({ error: "Role dan items diperlukan" });
-    if (role !== "student" && role !== "teacher") return res.status(400).json({ error: "Role harus 'student' atau 'teacher'" });
-    var created = [];
-    for (var ci = 0; ci < items.length; ci++) {
-      var item = items[ci];
-      var uname = (item.username || "").trim() || (item.name || "").toLowerCase().replace(/[^a-z0-9_.-]/g, ".").replace(/\.+/g, ".").replace(/^\.|\.$/g, "") + "." + Date.now().toString(36).slice(-4);
-      var pw = (item.password || "").trim() || "password123";
-      if (pw.length < 8) pw = pw + "12345678".slice(0, 8 - pw.length);
-      if (await findByField(SHEETS.USERS, "username", uname)) continue;
-      var row = { id: generateId(), name: (item.name || uname).trim(), username: uname, password_hash: await hashPassword(pw), role: role, created_at: new Date().toISOString() };
-      await addRow(SHEETS.USERS, row);
-      created.push({ name: row.name, username: uname, password: pw });
+    var { name, description, color, icon, sort_order } = req.body;
+    if (!name) return res.status(400).json({ error: "Nama kategori diperlukan" });
+    var slug = slugify(name);
+    var result = db.prepare("INSERT INTO categories (name, slug, description, color, icon, sort_order) VALUES (?, ?, ?, ?, ?, ?)").run(
+      name.trim(), slug, description || "", color || "#0d9488", icon || "newspaper", sort_order || 0
+    );
+    res.json({ message: "Kategori berhasil ditambahkan", id: result.lastInsertRowid });
+  } catch (e) {
+    if (e.message && e.message.includes("UNIQUE")) return res.status(400).json({ error: "Nama kategori sudah ada" });
+    res.status(500).json({ error: "Gagal menambahkan kategori" });
+  }
+});
+
+app.put("/api/categories/:id", authenticate, requireRole(["admin"]), function(req, res) {
+  try {
+    var { name, description, color, icon, sort_order } = req.body;
+    var cat = db.prepare("SELECT * FROM categories WHERE id = ?").get(req.params.id);
+    if (!cat) return res.status(404).json({ error: "Kategori tidak ditemukan" });
+
+    var updates = [];
+    var params = [];
+    if (name) { updates.push("name = ?"); params.push(name.trim()); updates.push("slug = ?"); params.push(slugify(name)); }
+    if (description !== undefined) { updates.push("description = ?"); params.push(description); }
+    if (color) { updates.push("color = ?"); params.push(color); }
+    if (icon) { updates.push("icon = ?"); params.push(icon); }
+    if (sort_order !== undefined) { updates.push("sort_order = ?"); params.push(sort_order); }
+
+    if (updates.length > 0) {
+      params.push(req.params.id);
+      db.prepare("UPDATE categories SET " + updates.join(", ") + " WHERE id = ?").run(...params);
     }
-    res.json(created);
-  } catch (e) { res.status(500).json({ error: "Gagal mengimpor pengguna: " + e.message }); }
+    res.json({ message: "Kategori berhasil diperbarui" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal memperbarui kategori" });
+  }
+});
+
+app.delete("/api/categories/:id", authenticate, requireRole(["admin"]), function(req, res) {
+  try {
+    db.prepare("UPDATE articles SET category_id = NULL WHERE category_id = ?").run(req.params.id);
+    db.prepare("DELETE FROM categories WHERE id = ?").run(req.params.id);
+    res.json({ message: "Kategori berhasil dihapus" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal menghapus kategori" });
+  }
 });
 
 // ============================================================
-//  SUBJECTS
+//  ARTICLES
 // ============================================================
 
-app.get("/api/subjects", authenticate, async function (_req, res) {
-  try {
-    var subjects = await readSheet(SHEETS.SUBJECTS);
-    res.json(subjects.map(function (s) {
-      return { id: s.id, name: s.name, description: s.description || "" };
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar mapel" }); }
+// Public: list published articles
+app.get("/api/articles", optionalAuth, function(req, res) {
+  var { category, tag, search, page, limit, status } = req.query;
+  page = parseInt(page) || 1;
+  limit = parseInt(limit) || 12;
+  var offset = (page - 1) * limit;
+
+  var where = ["a.status = 'published'"];
+  var params = [];
+
+  // Admin can see all statuses
+  if (status && req.user && req.user.role === "admin") {
+    where = ["a.status = ?"];
+    params.push(status);
+  }
+
+  if (category) {
+    where.push("c.slug = ?");
+    params.push(category);
+  }
+
+  if (search) {
+    where.push("(a.title LIKE ? OR a.excerpt LIKE ? OR a.content LIKE ?)");
+    var searchTerm = "%" + search + "%";
+    params.push(searchTerm, searchTerm, searchTerm);
+  }
+
+  var whereClause = where.length > 0 ? "WHERE " + where.join(" AND ") : "";
+
+  var total = db.prepare("SELECT COUNT(*) as count FROM articles a LEFT JOIN categories c ON a.category_id = c.id " + whereClause).get(...params).count;
+
+  var articles = db.prepare(`
+    SELECT a.*, c.name as category_name, c.slug as category_slug, c.color as category_color,
+           u.name as author_name, u.role as author_role
+    FROM articles a
+    LEFT JOIN categories c ON a.category_id = c.id
+    LEFT JOIN users u ON a.author_id = u.id
+    ${whereClause}
+    ORDER BY a.is_pinned DESC, a.published_at DESC, a.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+
+  // Get tags for each article
+  var tagStmt = db.prepare(`
+    SELECT t.name, t.slug FROM tags t
+    JOIN article_tags at ON t.id = at.tag_id
+    WHERE at.article_id = ?
+  `);
+
+  articles = articles.map(function(a) {
+    return Object.assign({}, a, {
+      tags: tagStmt.all(a.id),
+      comment_count: db.prepare("SELECT COUNT(*) as count FROM comments WHERE article_id = ? AND status = 'approved'").get(a.id).count
+    });
+  });
+
+  res.json({ articles: articles, total: total, page: page, pages: Math.ceil(total / limit) });
 });
 
-app.post("/api/subjects", authenticate, requireRole(["admin"]), async function (req, res) {
+// Public: get single article by slug
+app.get("/api/articles/:slug", optionalAuth, function(req, res) {
+  var article = db.prepare(`
+    SELECT a.*, c.name as category_name, c.slug as category_slug, c.color as category_color,
+           u.name as author_name, u.role as author_role, u.avatar as author_avatar
+    FROM articles a
+    LEFT JOIN categories c ON a.category_id = c.id
+    LEFT JOIN users u ON a.author_id = u.id
+    WHERE a.slug = ?
+  `).get(req.params.slug);
+
+  if (!article) return res.status(404).json({ error: "Artikel tidak ditemukan" });
+
+  // Increment views
+  db.prepare("UPDATE articles SET views = views + 1 WHERE id = ?").run(article.id);
+
+  // Get tags
+  var tags = db.prepare("SELECT t.name, t.slug FROM tags t JOIN article_tags at ON t.id = at.tag_id WHERE at.article_id = ?").all(article.id);
+
+  // Get approved comments
+  var comments = db.prepare(`
+    SELECT c.*, u.name as user_name, u.role as user_role, u.avatar as user_avatar
+    FROM comments c
+    JOIN users u ON c.user_id = u.id
+    WHERE c.article_id = ? AND c.status = 'approved'
+    ORDER BY c.created_at DESC
+  `).all(article.id);
+
+  // Get related articles
+  var related = db.prepare(`
+    SELECT a.id, a.title, a.slug, a.excerpt, a.featured_image, a.published_at,
+           c.name as category_name, c.color as category_color
+    FROM articles a
+    LEFT JOIN categories c ON a.category_id = c.id
+    WHERE a.status = 'published' AND a.id != ? AND a.category_id = ?
+    ORDER BY a.published_at DESC LIMIT 3
+  `).all(article.id, article.category_id);
+
+  res.json(Object.assign({}, article, { tags: tags, comments: comments, related: related, views: article.views + 1 }));
+});
+
+// Create article
+app.post("/api/articles", authenticate, requireRole(["admin", "teacher"]), function(req, res) {
   try {
-    var name = req.body && req.body.name;
-    if (!name || !name.trim()) return res.status(400).json({ error: "Nama mapel diperlukan" });
-    var existing = await readSheet(SHEETS.SUBJECTS);
-    if (existing.find(function (s) { return s.name.toLowerCase() === name.trim().toLowerCase(); })) {
-      return res.status(400).json({ error: "Mapel sudah ada" });
+    var { title, content, excerpt, category_id, status, featured_image, is_featured, is_pinned, tags } = req.body;
+    if (!title || !content) return res.status(400).json({ error: "Judul dan konten diperlukan" });
+
+    var slug = slugify(title);
+    // Ensure unique slug
+    var existing = db.prepare("SELECT id FROM articles WHERE slug = ?").get(slug);
+    if (existing) slug = slug + "-" + Date.now().toString(36);
+
+    var articleStatus = status || "draft";
+    var publishedAt = articleStatus === "published" ? new Date().toISOString() : null;
+
+    var result = db.prepare(`
+      INSERT INTO articles (title, slug, content, excerpt, featured_image, category_id, author_id, status, is_featured, is_pinned, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      title.trim(), slug, content, excerpt || "", featured_image || "",
+      category_id || null, req.user.userId, articleStatus,
+      is_featured ? 1 : 0, is_pinned ? 1 : 0, publishedAt
+    );
+
+    // Handle tags
+    if (tags && Array.isArray(tags)) {
+      var insertTagXref = db.prepare("INSERT OR IGNORE INTO article_tags (article_id, tag_id) VALUES (?, ?)");
+      tags.forEach(function(tagId) {
+        insertTagXref.run(result.lastInsertRowid, tagId);
+      });
     }
-    var id = generateId();
-    await addRow(SHEETS.SUBJECTS, { id: id, name: name.trim(), description: (req.body && req.body.description) || "", created_by: req.user.userId, created_at: new Date().toISOString() });
-    res.json({ message: "Mapel berhasil ditambahkan", id: id });
-  } catch (e) { res.status(500).json({ error: "Gagal menambahkan mapel: " + e.message }); }
+
+    logActivity(req.user.userId, "create_article", "article", result.lastInsertRowid, "Membuat artikel: " + title);
+    res.json({ message: "Artikel berhasil dibuat", id: result.lastInsertRowid, slug: slug });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal membuat artikel: " + e.message });
+  }
 });
 
-app.delete("/api/subjects/:id", authenticate, requireRole(["admin"]), async function (req, res) {
+// Update article
+app.put("/api/articles/:id", authenticate, requireRole(["admin", "teacher"]), function(req, res) {
   try {
-    var subjects = await readSheet(SHEETS.SUBJECTS);
-    if (!subjects.find(function (s) { return s.id === req.params.id; })) return res.status(404).json({ error: "Mapel tidak ditemukan" });
-    var deleted = await deleteRow(SHEETS.SUBJECTS, req.params.id);
-    if (!deleted) return res.status(404).json({ error: "Mapel tidak ditemukan di spreadsheet" });
-    res.json({ message: "Mapel berhasil dihapus" });
-  } catch (e) { res.status(500).json({ error: "Gagal menghapus mapel: " + e.message }); }
-});
+    var article = db.prepare("SELECT * FROM articles WHERE id = ?").get(req.params.id);
+    if (!article) return res.status(404).json({ error: "Artikel tidak ditemukan" });
 
-// ============================================================
-//  EXAMS
-// ============================================================
+    // Teachers can only edit their own articles
+    if (req.user.role === "teacher" && article.author_id !== req.user.userId) {
+      return res.status(403).json({ error: "Anda hanya bisa mengedit artikel sendiri" });
+    }
 
-app.get("/api/exams", authenticate, async function (req, res) {
-  try {
-    var exams = await readSheet(SHEETS.EXAMS);
-    var subjects = await readSheet(SHEETS.SUBJECTS);
-    var users = await readSheet(SHEETS.USERS);
-    var subjectMap = new Map(subjects.map(function (s) { return [s.id, s.name]; }));
-    var userMap = new Map(users.map(function (u) { return [u.id, u.name]; }));
-    var filtered = exams;
-    if (req.user.role === "teacher") filtered = exams.filter(function (e) { return e.created_by === req.user.userId; });
-    else if (req.user.role === "student") filtered = exams.filter(function (e) { return e.is_active === "true"; });
-    res.json(filtered.map(function (exam) {
-      return Object.assign({}, exam, {
-        subjectName: subjectMap.get(exam.subject_id) || null,
-        teacherName: userMap.get(exam.created_by) || null,
-        durationMinutes: parseInt(exam.duration_minutes),
-        isActive: exam.is_active === "true",
-        startsAt: exam.starts_at ? parseInt(exam.starts_at) : undefined,
-        endsAt: exam.ends_at ? parseInt(exam.ends_at) : undefined,
+    var { title, content, excerpt, category_id, status, featured_image, is_featured, is_pinned, tags } = req.body;
+
+    var updates = ["updated_at = datetime('now')"];
+    var params = [];
+
+    if (title) { updates.push("title = ?"); params.push(title.trim()); var newSlug = slugify(title); updates.push("slug = ?"); params.push(newSlug); }
+    if (content !== undefined) { updates.push("content = ?"); params.push(content); }
+    if (excerpt !== undefined) { updates.push("excerpt = ?"); params.push(excerpt); }
+    if (category_id !== undefined) { updates.push("category_id = ?"); params.push(category_id || null); }
+    if (featured_image !== undefined) { updates.push("featured_image = ?"); params.push(featured_image); }
+    if (is_featured !== undefined) { updates.push("is_featured = ?"); params.push(is_featured ? 1 : 0); }
+    if (is_pinned !== undefined) { updates.push("is_pinned = ?"); params.push(is_pinned ? 1 : 0); }
+    if (status) {
+      updates.push("status = ?"); params.push(status);
+      if (status === "published" && article.status !== "published") {
+        updates.push("published_at = datetime('now')");
+      }
+    }
+
+    params.push(req.params.id);
+    db.prepare("UPDATE articles SET " + updates.join(", ") + " WHERE id = ?").run(...params);
+
+    // Handle tags
+    if (tags && Array.isArray(tags)) {
+      db.prepare("DELETE FROM article_tags WHERE article_id = ?").run(req.params.id);
+      var insertTagXref = db.prepare("INSERT OR IGNORE INTO article_tags (article_id, tag_id) VALUES (?, ?)");
+      tags.forEach(function(tagId) {
+        insertTagXref.run(req.params.id, tagId);
       });
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil daftar ujian: " + e.message }); }
+    }
+
+    logActivity(req.user.userId, "update_article", "article", req.params.id, "Mengupdate artikel");
+    res.json({ message: "Artikel berhasil diperbarui" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal memperbarui artikel: " + e.message });
+  }
 });
 
-app.get("/api/exams/:id", authenticate, async function (req, res) {
+// Delete article
+app.delete("/api/articles/:id", authenticate, requireRole(["admin", "teacher"]), function(req, res) {
   try {
-    var exams = await readSheet(SHEETS.EXAMS);
-    var subjects = await readSheet(SHEETS.SUBJECTS);
-    var users = await readSheet(SHEETS.USERS);
-    var subjectMap = new Map(subjects.map(function (s) { return [s.id, s.name]; }));
-    var userMap = new Map(users.map(function (u) { return [u.id, u.name]; }));
-    var exam = exams.find(function (e) { return e.id === req.params.id; });
-    if (!exam) return res.status(404).json({ error: "Ujian tidak ditemukan" });
-    res.json(Object.assign({}, exam, {
-      subjectName: subjectMap.get(exam.subject_id) || null,
-      teacherName: userMap.get(exam.created_by) || null,
-      durationMinutes: parseInt(exam.duration_minutes),
-      isActive: exam.is_active === "true",
-      startsAt: exam.starts_at ? parseInt(exam.starts_at) : undefined,
-      endsAt: exam.ends_at ? parseInt(exam.ends_at) : undefined,
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data ujian" }); }
+    var article = db.prepare("SELECT * FROM articles WHERE id = ?").get(req.params.id);
+    if (!article) return res.status(404).json({ error: "Artikel tidak ditemukan" });
+
+    if (req.user.role === "teacher" && article.author_id !== req.user.userId) {
+      return res.status(403).json({ error: "Anda hanya bisa menghapus artikel sendiri" });
+    }
+
+    db.prepare("DELETE FROM article_tags WHERE article_id = ?").run(req.params.id);
+    db.prepare("DELETE FROM comments WHERE article_id = ?").run(req.params.id);
+    db.prepare("DELETE FROM articles WHERE id = ?").run(req.params.id);
+    logActivity(req.user.userId, "delete_article", "article", req.params.id, "Menghapus artikel: " + article.title);
+    res.json({ message: "Artikel berhasil dihapus" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal menghapus artikel" });
+  }
 });
 
-app.post("/api/exams", authenticate, requireRole(["teacher"]), async function (req, res) {
-  try {
-    var title = req.body && req.body.title;
-    var subjectId = req.body && req.body.subjectId;
-    var description = req.body && req.body.description || "";
-    var googleFormUrl = req.body && req.body.googleFormUrl || "";
-    var durationMinutes = req.body && parseInt(req.body.durationMinutes) || 60;
-    if (!title || !subjectId) return res.status(400).json({ error: "Judul dan mapel diperlukan" });
-    var id = generateId();
-    await addRow(SHEETS.EXAMS, {
-      id: id, title: title, subject_id: subjectId, description: description,
-      google_form_url: googleFormUrl, duration_minutes: String(durationMinutes),
-      is_active: "false", starts_at: "", ends_at: "",
-      created_by: req.user.userId, created_at: new Date().toISOString(),
-    });
-    res.json({ message: "Ujian berhasil dibuat", id: id });
-  } catch (e) { res.status(500).json({ error: "Gagal membuat ujian: " + e.message }); }
-});
+// Admin: all articles with any status
+app.get("/api/admin/articles", authenticate, requireRole(["admin", "teacher"]), function(req, res) {
+  var { status, category, search, page, limit } = req.query;
+  page = parseInt(page) || 1;
+  limit = parseInt(limit) || 20;
+  var offset = (page - 1) * limit;
 
-app.patch("/api/exams/:id/schedule", authenticate, requireRole(["admin"]), async function (req, res) {
-  try {
-    var isActive = req.body && req.body.isActive;
-    var startsAt = req.body && req.body.startsAt;
-    var endsAt = req.body && req.body.endsAt;
-    var exams = await readSheet(SHEETS.EXAMS);
-    var exam = exams.find(function (e) { return e.id === req.params.id; });
-    if (!exam) return res.status(404).json({ error: "Ujian tidak ditemukan" });
-    var updates = {};
-    updates.is_active = isActive ? "true" : "false";
-    updates.starts_at = startsAt ? String(startsAt) : "";
-    updates.ends_at = endsAt ? String(endsAt) : "";
-    await updateRow(SHEETS.EXAMS, req.params.id, updates);
-    res.json({ message: "Jadwal ujian diperbarui" });
-  } catch (e) { res.status(500).json({ error: "Gagal memperbarui jadwal: " + e.message }); }
-});
+  var where = [];
+  var params = [];
 
-app.get("/api/exams/:id/summary", authenticate, requireRole(["admin", "teacher"]), async function (req, res) {
-  try {
-    var attempts = await readSheet(SHEETS.ATTEMPTS);
-    var examAttempts = attempts.filter(function (a) { return a.exam_id === req.params.id; });
-    res.json({
-      started: examAttempts.length,
-      inProgress: examAttempts.filter(function (a) { return a.status === "in_progress"; }).length,
-      completed: examAttempts.filter(function (a) { return a.status === "completed"; }).length,
-      expired: examAttempts.filter(function (a) { return a.status === "expired"; }).length,
-      totalViolations: examAttempts.reduce(function (sum, a) { return sum + parseInt(a.violation_count || "0"); }, 0),
-    });
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil ringkasan" }); }
-});
+  if (req.user.role === "teacher") {
+    where.push("a.author_id = ?");
+    params.push(req.user.userId);
+  }
 
-app.get("/api/exams/:id/attempts", authenticate, requireRole(["admin", "teacher"]), async function (req, res) {
-  try {
-    var attempts = await readSheet(SHEETS.ATTEMPTS);
-    var users = await readSheet(SHEETS.USERS);
-    var userMap = new Map(users.map(function (u) { return [u.id, { name: u.name, username: u.username }]; }));
-    var examAttempts = attempts.filter(function (a) { return a.exam_id === req.params.id; });
-    res.json(examAttempts.map(function (a) {
-      return Object.assign({}, a, {
-        violationCount: parseInt(a.violation_count || "0"),
-        student: userMap.get(a.student_id) || null,
-      });
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan" }); }
+  if (status) { where.push("a.status = ?"); params.push(status); }
+  if (category) { where.push("c.slug = ?"); params.push(category); }
+  if (search) {
+    where.push("(a.title LIKE ? OR a.excerpt LIKE ?)");
+    params.push("%" + search + "%", "%" + search + "%");
+  }
+
+  var whereClause = where.length > 0 ? "WHERE " + where.join(" AND ") : "";
+  var total = db.prepare("SELECT COUNT(*) as count FROM articles a LEFT JOIN categories c ON a.category_id = c.id " + whereClause).get(...params).count;
+
+  var articles = db.prepare(`
+    SELECT a.*, c.name as category_name, c.slug as category_slug,
+           u.name as author_name
+    FROM articles a
+    LEFT JOIN categories c ON a.category_id = c.id
+    LEFT JOIN users u ON a.author_id = u.id
+    ${whereClause}
+    ORDER BY a.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+
+  res.json({ articles: articles, total: total, page: page, pages: Math.ceil(total / limit) });
 });
 
 // ============================================================
-//  ATTEMPTS
+//  COMMENTS
 // ============================================================
 
-app.get("/api/attempts/my/:examId", authenticate, async function (req, res) {
+app.post("/api/articles/:id/comments", authenticate, function(req, res) {
   try {
-    var attempts = await readSheet(SHEETS.ATTEMPTS);
-    var myAttempt = attempts.find(function (a) { return a.exam_id === req.params.examId && a.student_id === req.user.userId && a.status === "in_progress"; });
-    if (!myAttempt) return res.json(null);
-    res.json(Object.assign({}, myAttempt, {
-      startedAt: parseInt(myAttempt.started_at),
-      endsAt: parseInt(myAttempt.ends_at),
-      violationCount: parseInt(myAttempt.violation_count || "0"),
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan" }); }
+    var { content } = req.body;
+    if (!content || !content.trim()) return res.status(400).json({ error: "Komentar tidak boleh kosong" });
+
+    var article = db.prepare("SELECT id FROM articles WHERE id = ? AND status = 'published'").get(req.params.id);
+    if (!article) return res.status(404).json({ error: "Artikel tidak ditemukan" });
+
+    var result = db.prepare("INSERT INTO comments (article_id, user_id, content, status) VALUES (?, ?, ?, 'approved')").run(
+      req.params.id, req.user.userId, content.trim()
+    );
+    logActivity(req.user.userId, "create_comment", "comment", result.lastInsertRowid, "Komentar pada artikel #" + req.params.id);
+    res.json({ message: "Komentar berhasil ditambahkan", id: result.lastInsertRowid });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal menambahkan komentar" });
+  }
 });
 
-app.get("/api/attempts/my", authenticate, async function (req, res) {
-  try {
-    var attempts = await readSheet(SHEETS.ATTEMPTS);
-    var myAttempts = attempts.filter(function (a) { return a.student_id === req.user.userId; });
-    res.json(myAttempts.map(function (a) {
-      return Object.assign({}, a, {
-        startedAt: parseInt(a.started_at),
-        endsAt: parseInt(a.ends_at),
-        completedAt: a.completed_at ? parseInt(a.completed_at) : undefined,
-        violationCount: parseInt(a.violation_count || "0"),
-      });
-    }));
-  } catch (e) { res.status(500).json({ error: "Gagal mengambil data percobaan" }); }
+app.get("/api/admin/comments", authenticate, requireRole(["admin"]), function(req, res) {
+  var { status } = req.query;
+  var where = status ? "WHERE c.status = ?" : "";
+  var params = status ? [status] : [];
+
+  var comments = db.prepare(`
+    SELECT c.*, u.name as user_name, u.role as user_role, a.title as article_title, a.slug as article_slug
+    FROM comments c
+    JOIN users u ON c.user_id = u.id
+    JOIN articles a ON c.article_id = a.id
+    ${where}
+    ORDER BY c.created_at DESC
+    LIMIT 100
+  `).all(...params);
+
+  res.json(comments);
 });
 
-app.post("/api/attempts/start", authenticate, requireRole(["student"]), async function (req, res) {
-  try {
-    var examId = req.body && req.body.examId;
-    if (!examId) return res.status(400).json({ error: "examId diperlukan" });
-    var exams = await readSheet(SHEETS.EXAMS);
-    var exam = exams.find(function (e) { return e.id === examId; });
-    if (!exam) return res.status(404).json({ error: "Ujian tidak ditemukan" });
-    if (exam.is_active !== "true") return res.status(403).json({ error: "Ujian belum aktif" });
-    var now = Date.now();
-    if (exam.starts_at && parseInt(exam.starts_at) > now) return res.status(403).json({ error: "Ujian belum dibuka" });
-    if (exam.ends_at && parseInt(exam.ends_at) < now) return res.status(403).json({ error: "Ujian sudah ditutup" });
-    var attempts = await readSheet(SHEETS.ATTEMPTS);
-    var existing = attempts.find(function (a) { return a.exam_id === examId && a.student_id === req.user.userId && a.status === "in_progress"; });
-    if (existing) return res.json({ id: existing.id });
-    var durationMs = parseInt(exam.duration_minutes) * 60 * 1000;
-    var id = generateId();
-    await addRow(SHEETS.ATTEMPTS, {
-      id: id, exam_id: examId, student_id: req.user.userId,
-      status: "in_progress", started_at: String(now), ends_at: String(now + durationMs),
-      completed_at: "", violation_count: "0", violations: "",
-    });
-    res.json({ id: id });
-  } catch (e) { res.status(500).json({ error: "Gagal memulai percobaan: " + e.message }); }
+app.put("/api/comments/:id/status", authenticate, requireRole(["admin"]), function(req, res) {
+  var { status } = req.body;
+  if (!["approved", "rejected", "pending"].includes(status)) {
+    return res.status(400).json({ error: "Status tidak valid" });
+  }
+  db.prepare("UPDATE comments SET status = ? WHERE id = ?").run(status, req.params.id);
+  res.json({ message: "Status komentar diperbarui" });
 });
 
-app.post("/api/attempts/violation", authenticate, async function (req, res) {
-  try {
-    var attemptId = req.body && req.body.attemptId;
-    var type = req.body && req.body.type;
-    if (!attemptId) return res.status(400).json({ error: "attemptId diperlukan" });
-    var attempts = await readSheet(SHEETS.ATTEMPTS);
-    var attempt = attempts.find(function (a) { return a.id === attemptId; });
-    if (!attempt) return res.status(404).json({ error: "Percobaan tidak ditemukan" });
-    var count = parseInt(attempt.violation_count || "0") + 1;
-    var violations = (attempt.violations || "") + (attempt.violations ? ";" : "") + (type || "unknown") + ":" + Date.now();
-    await updateRow(SHEETS.ATTEMPTS, attemptId, { violation_count: String(count), violations: violations });
-    res.json({ violationCount: count });
-  } catch (e) { res.status(500).json({ error: "Gagal mencatat pelanggaran" }); }
+app.delete("/api/comments/:id", authenticate, requireRole(["admin"]), function(req, res) {
+  db.prepare("DELETE FROM comments WHERE id = ?").run(req.params.id);
+  res.json({ message: "Komentar berhasil dihapus" });
 });
 
-app.post("/api/attempts/complete", authenticate, async function (req, res) {
-  try {
-    var attemptId = req.body && req.body.attemptId;
-    if (!attemptId) return res.status(400).json({ error: "attemptId diperlukan" });
-    await updateRow(SHEETS.ATTEMPTS, attemptId, { status: "completed", completed_at: String(Date.now()) });
-    res.json({ message: "Percobaan selesai" });
-  } catch (e) { res.status(500).json({ error: "Gagal menyelesaikan percobaan" }); }
+// ============================================================
+//  ANNOUNCEMENTS
+// ============================================================
+
+app.get("/api/announcements", function(_req, res) {
+  var announcements = db.prepare(`
+    SELECT a.*, u.name as author_name
+    FROM announcements a
+    LEFT JOIN users u ON a.created_by = u.id
+    WHERE a.is_active = 1
+    ORDER BY a.priority DESC, a.created_at DESC
+  `).all();
+  res.json(announcements);
 });
 
-app.post("/api/attempts/expire", authenticate, async function (req, res) {
+app.get("/api/admin/announcements", authenticate, requireRole(["admin"]), function(_req, res) {
+  var announcements = db.prepare(`
+    SELECT a.*, u.name as author_name
+    FROM announcements a
+    LEFT JOIN users u ON a.created_by = u.id
+    ORDER BY a.created_at DESC
+  `).all();
+  res.json(announcements);
+});
+
+app.post("/api/announcements", authenticate, requireRole(["admin"]), function(req, res) {
   try {
-    var attemptId = req.body && req.body.attemptId;
-    if (!attemptId) return res.status(400).json({ error: "attemptId diperlukan" });
-    await updateRow(SHEETS.ATTEMPTS, attemptId, { status: "expired", completed_at: String(Date.now()) });
-    res.json({ message: "Percobaan kedaluwarsa" });
-  } catch (e) { res.status(500).json({ error: "Gagal mengarsipkan percobaan" }); }
+    var { title, content, priority, is_active, expires_at } = req.body;
+    if (!title || !content) return res.status(400).json({ error: "Judul dan konten diperlukan" });
+
+    var result = db.prepare("INSERT INTO announcements (title, content, priority, is_active, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?)").run(
+      title.trim(), content, priority || "normal", is_active !== undefined ? (is_active ? 1 : 0) : 1, expires_at || null, req.user.userId
+    );
+    logActivity(req.user.userId, "create_announcement", "announcement", result.lastInsertRowid, "Membuat pengumuman: " + title);
+    res.json({ message: "Pengumuman berhasil dibuat", id: result.lastInsertRowid });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal membuat pengumuman" });
+  }
+});
+
+app.put("/api/announcements/:id", authenticate, requireRole(["admin"]), function(req, res) {
+  try {
+    var { title, content, priority, is_active, expires_at } = req.body;
+    var updates = [];
+    var params = [];
+
+    if (title) { updates.push("title = ?"); params.push(title.trim()); }
+    if (content) { updates.push("content = ?"); params.push(content); }
+    if (priority) { updates.push("priority = ?"); params.push(priority); }
+    if (is_active !== undefined) { updates.push("is_active = ?"); params.push(is_active ? 1 : 0); }
+    if (expires_at !== undefined) { updates.push("expires_at = ?"); params.push(expires_at || null); }
+
+    if (updates.length === 0) return res.status(400).json({ error: "Tidak ada data yang diubah" });
+    params.push(req.params.id);
+    db.prepare("UPDATE announcements SET " + updates.join(", ") + " WHERE id = ?").run(...params);
+    res.json({ message: "Pengumuman berhasil diperbarui" });
+  } catch (e) {
+    res.status(500).json({ error: "Gagal memperbarui pengumuman" });
+  }
+});
+
+app.delete("/api/announcements/:id", authenticate, requireRole(["admin"]), function(req, res) {
+  db.prepare("DELETE FROM announcements WHERE id = ?").run(req.params.id);
+  res.json({ message: "Pengumuman berhasil dihapus" });
+});
+
+// ============================================================
+//  SLIDERS
+// ============================================================
+
+app.get("/api/sliders", function(_req, res) {
+  var sliders = db.prepare("SELECT * FROM sliders WHERE is_active = 1 ORDER BY sort_order ASC").all();
+  res.json(sliders);
+});
+
+// ============================================================
+//  TAGS
+// ============================================================
+
+app.get("/api/tags", function(_req, res) {
+  var tags = db.prepare("SELECT t.*, (SELECT COUNT(*) FROM article_tags WHERE tag_id = t.id) as article_count FROM tags t ORDER BY t.name ASC").all();
+  res.json(tags);
+});
+
+// ============================================================
+//  DASHBOARD STATS
+// ============================================================
+
+app.get("/api/admin/stats", authenticate, requireRole(["admin"]), function(_req, res) {
+  var totalArticles = db.prepare("SELECT COUNT(*) as count FROM articles").get().count;
+  var publishedArticles = db.prepare("SELECT COUNT(*) as count FROM articles WHERE status = 'published'").get().count;
+  var draftArticles = db.prepare("SELECT COUNT(*) as count FROM articles WHERE status = 'draft'").get().count;
+  var totalViews = db.prepare("SELECT COALESCE(SUM(views), 0) as total FROM articles").get().total;
+  var totalUsers = db.prepare("SELECT COUNT(*) as count FROM users").get().count;
+  var totalTeachers = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'teacher'").get().count;
+  var totalStudents = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'student'").get().count;
+  var totalCategories = db.prepare("SELECT COUNT(*) as count FROM categories").get().count;
+  var pendingComments = db.prepare("SELECT COUNT(*) as count FROM comments WHERE status = 'pending'").get().count;
+  var totalComments = db.prepare("SELECT COUNT(*) as count FROM comments").get().count;
+  var totalAnnouncements = db.prepare("SELECT COUNT(*) as count FROM announcements").get().count;
+
+  var recentArticles = db.prepare(`
+    SELECT a.id, a.title, a.slug, a.status, a.views, a.created_at, u.name as author_name
+    FROM articles a LEFT JOIN users u ON a.author_id = u.id
+    ORDER BY a.created_at DESC LIMIT 5
+  `).all();
+
+  var topArticles = db.prepare(`
+    SELECT a.id, a.title, a.slug, a.views, u.name as author_name
+    FROM articles a LEFT JOIN users u ON a.author_id = u.id
+    WHERE a.status = 'published'
+    ORDER BY a.views DESC LIMIT 5
+  `).all();
+
+  var categoryStats = db.prepare(`
+    SELECT c.name, c.color, COUNT(a.id) as count
+    FROM categories c
+    LEFT JOIN articles a ON c.id = a.category_id AND a.status = 'published'
+    GROUP BY c.id ORDER BY count DESC
+  `).all();
+
+  res.json({
+    totalArticles: totalArticles,
+    publishedArticles: publishedArticles,
+    draftArticles: draftArticles,
+    totalViews: totalViews,
+    totalUsers: totalUsers,
+    totalTeachers: totalTeachers,
+    totalStudents: totalStudents,
+    totalCategories: totalCategories,
+    pendingComments: pendingComments,
+    totalComments: totalComments,
+    totalAnnouncements: totalAnnouncements,
+    recentArticles: recentArticles,
+    topArticles: topArticles,
+    categoryStats: categoryStats
+  });
+});
+
+app.get("/api/teacher/stats", authenticate, requireRole(["teacher"]), function(req, res) {
+  var totalArticles = db.prepare("SELECT COUNT(*) as count FROM articles WHERE author_id = ?").get(req.user.userId).count;
+  var publishedArticles = db.prepare("SELECT COUNT(*) as count FROM articles WHERE author_id = ? AND status = 'published'").get(req.user.userId).count;
+  var totalViews = db.prepare("SELECT COALESCE(SUM(views), 0) as total FROM articles WHERE author_id = ?").get(req.user.userId).total;
+  var totalComments = db.prepare(`
+    SELECT COUNT(*) as count FROM comments c
+    JOIN articles a ON c.article_id = a.id
+    WHERE a.author_id = ? AND c.status = 'approved'
+  `).get(req.user.userId).count;
+
+  var articles = db.prepare(`
+    SELECT a.*, c.name as category_name
+    FROM articles a
+    LEFT JOIN categories c ON a.category_id = c.id
+    WHERE a.author_id = ?
+    ORDER BY a.created_at DESC LIMIT 10
+  `).all(req.user.userId);
+
+  res.json({
+    totalArticles: totalArticles,
+    publishedArticles: publishedArticles,
+    totalViews: totalViews,
+    totalComments: totalComments,
+    articles: articles
+  });
+});
+
+app.get("/api/student/stats", authenticate, requireRole(["student"]), function(req, res) {
+  var totalComments = db.prepare("SELECT COUNT(*) as count FROM comments WHERE user_id = ?").get(req.user.userId).count;
+  var recentComments = db.prepare(`
+    SELECT c.*, a.title as article_title, a.slug as article_slug
+    FROM comments c
+    JOIN articles a ON c.article_id = a.id
+    WHERE c.user_id = ?
+    ORDER BY c.created_at DESC LIMIT 10
+  `).all(req.user.userId);
+
+  res.json({ totalComments: totalComments, recentComments: recentComments });
+});
+
+// ============================================================
+//  ACTIVITY LOGS
+// ============================================================
+
+app.get("/api/admin/logs", authenticate, requireRole(["admin"]), function(req, res) {
+  var logs = db.prepare(`
+    SELECT l.*, u.name as user_name, u.username
+    FROM activity_logs l
+    LEFT JOIN users u ON l.user_id = u.id
+    ORDER BY l.created_at DESC LIMIT 100
+  `).all();
+  res.json(logs);
 });
 
 // ============================================================
@@ -956,23 +1123,23 @@ app.post("/api/attempts/expire", authenticate, async function (req, res) {
 
 var distPath = path.join(process.cwd(), "dist");
 if (fs.existsSync(distPath)) {
-  console.log("[UjianKita] Serving static files from", distPath);
+  console.log("[Portal] Serving static files from", distPath);
   app.use(express.static(distPath));
-  app.get("*", function (req, res) {
+  app.get("*", function(req, res) {
     if (req.path.startsWith("/api/")) return res.status(404).json({ error: "Not found" });
     res.sendFile(path.join(distPath, "index.html"));
   });
 } else {
-  console.warn("[UjianKita] dist/ folder not found — frontend not built yet");
-  app.get("*", function (req, res) {
+  console.warn("[Portal] dist/ folder not found — frontend not built yet");
+  app.get("*", function(req, res) {
     if (req.path.startsWith("/api/")) return res.status(404).json({ error: "Not found" });
-    res.status(200).send("Backend is running. Frontend not built yet.");
+    res.status(200).send("Portal Berita MAN 2 Palembang — Backend is running.");
   });
 }
 
 // Error handler
-app.use(function (err, _req, res, _next) {
-  console.error("[UjianKita] Express error:", err);
+app.use(function(err, _req, res, _next) {
+  console.error("[Portal] Express error:", err);
   res.status(500).json({ error: "Internal server error" });
 });
 
@@ -980,27 +1147,8 @@ app.use(function (err, _req, res, _next) {
 //  Start server
 // ============================================================
 
-// Initialize Google Sheets (non-blocking — server starts anyway)
-(async function () {
-  console.log("[UjianKita] Initializing Google Sheets...");
-  try {
-    if (!SPREADSHEET_ID) throw new Error("GOOGLE_SHEET_ID not set");
-    if (!SA_EMAIL) throw new Error("GOOGLE_SERVICE_ACCOUNT_EMAIL not set");
-    if (!SA_KEY) throw new Error("No private key available");
-    if (!SA_KEY_OBJ) throw new Error("Private key not available (OpenSSL error — add NODE_OPTIONS=--openssl-legacy-provider)");
-
-    // Verify access
-    await getAccessToken();
-    var meta = await sheetsApi("GET", "");
-    console.log("[UjianKita] Spreadsheet:", meta.properties && meta.properties.title, "| Sheets:", (meta.sheets || []).map(function (s) { return s.properties && s.properties.title; }).join(", "));
-  } catch (e) {
-    console.error("[UjianKita] Failed to initialize spreadsheet:", e.message);
-    console.error("[UjianKita] Server will start anyway — Google Sheets may not be configured correctly");
-  }
-})();
-
-// Listen on 0.0.0.0 (all interfaces)
-app.listen(PORT, "0.0.0.0", function () {
-  console.log("[UjianKita] ✅ Server running on port " + PORT);
-  console.log("[UjianKita] API available at http://localhost:" + PORT + "/api");
+app.listen(PORT, "0.0.0.0", function() {
+  console.log("[Portal] ✅ Server running on port " + PORT);
+  console.log("[Portal] API available at http://localhost:" + PORT + "/api");
+  console.log("[Portal] Database: SQLite (" + dbPath + ")");
 });

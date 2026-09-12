@@ -7,24 +7,24 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router";
 import "./index.css";
 
-// Lazy load route components for better code splitting
+// Lazy load route components
 const Landing = lazy(() => import("./pages/Landing.tsx"));
 const AuthPage = lazy(() => import("./pages/Auth.tsx"));
-const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
+const ArticleList = lazy(() => import("./pages/ArticleList.tsx"));
+const ArticleDetail = lazy(() => import("./pages/ArticleDetail.tsx"));
 const AdminDashboard = lazy(() => import("./pages/AdminDashboard.tsx"));
-const ExamPage = lazy(() => import("./pages/ExamPage.tsx"));
+const TeacherDashboard = lazy(() => import("./pages/TeacherDashboard.tsx"));
+const StudentDashboard = lazy(() => import("./pages/StudentDashboard.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 
-// Simple loading fallback for route transitions
 function RouteLoading() {
   return (
     <div className="min-h-screen flex items-center justify-center">
-      <div className="animate-pulse text-muted-foreground">Loading...</div>
+      <div className="animate-pulse text-muted-foreground">Memuat...</div>
     </div>
   );
 }
 
-/** Hard guard so runtime errors never leave the preview as a blank page. */
 class RootErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { hasError: boolean; message: string; stack: string }
@@ -38,17 +38,15 @@ class RootErrorBoundary extends React.Component<
     };
   }
   componentDidCatch(err: Error) {
-    console.error("[WebContainer preview] Root crash:", err);
+    console.error("[Portal] Root crash:", err);
   }
   render() {
     if (this.state.hasError) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-background text-foreground p-6">
           <div className="max-w-lg text-center">
-            <p className="text-sm font-semibold">Preview runtime error</p>
-            <p className="mt-2 text-xs text-muted-foreground break-words">
-              {this.state.message}
-            </p>
+            <p className="text-sm font-semibold">Terjadi kesalahan</p>
+            <p className="mt-2 text-xs text-muted-foreground break-words">{this.state.message}</p>
             {this.state.stack && (
               <pre className="mt-3 text-left text-[10px] leading-4 text-muted-foreground/80 max-h-40 overflow-auto rounded border border-border/60 p-2">
                 {this.state.stack}
@@ -88,23 +86,19 @@ function RouteSyncer() {
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <RootErrorBoundary>
-<BrowserRouter>
+      <BrowserRouter>
         <RouteSyncer />
         <Suspense fallback={<RouteLoading />}>
           <Routes>
+            {/* Public routes */}
             <Route path="/" element={<Landing />} />
-            <Route
-              path="/auth"
-              element={<AuthPage redirectAfterAuth="/dashboard" />}
-            />
-            <Route
-              path="/dashboard"
-              element={
-                <RequireAuth>
-                  <Dashboard />
-                </RequireAuth>
-              }
-            />
+            <Route path="/berita" element={<ArticleList />} />
+            <Route path="/berita/:slug" element={<ArticleDetail />} />
+
+            {/* Auth */}
+            <Route path="/auth" element={<AuthPage redirectAfterAuth="/admin" />} />
+
+            {/* Admin Dashboard */}
             <Route
               path="/admin"
               element={
@@ -115,21 +109,48 @@ createRoot(document.getElementById("root")!).render(
                 </RequireAuth>
               }
             />
+
+            {/* Teacher Dashboard */}
             <Route
-              path="/exam/:examId"
+              path="/guru"
               element={
                 <RequireAuth>
-                  <RequireRole role="student">
-                    <ExamPage />
+                  <RequireRole role="teacher">
+                    <TeacherDashboard />
                   </RequireRole>
                 </RequireAuth>
               }
             />
+
+            {/* Student Dashboard */}
+            <Route
+              path="/siswa"
+              element={
+                <RequireAuth>
+                  <RequireRole role="student">
+                    <StudentDashboard />
+                  </RequireRole>
+                </RequireAuth>
+              }
+            />
+
+            {/* Legacy routes redirect */}
+            <Route path="/dashboard" element={<RequireAuth><RedirectToRole /></RequireAuth>} />
+
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
+        <Toaster />
       </BrowserRouter>
-      <Toaster />
     </RootErrorBoundary>
   </StrictMode>,
 );
+
+// Helper to redirect to correct dashboard based on role
+import { useAuth } from "@/hooks/use-auth";
+function RedirectToRole() {
+  const { user } = useAuth();
+  if (user?.role === "admin") return <AdminDashboard />;
+  if (user?.role === "teacher") return <TeacherDashboard />;
+  return <StudentDashboard />;
+}
